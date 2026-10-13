@@ -9,6 +9,7 @@ Run:  python3 -m pytest tests/tools
 import csv
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import sys
@@ -96,9 +97,13 @@ def nvs_image(tmp_path, monkeypatch):
     monkeypatch.setattr(ff, "run", fake_run)
 
     def build(cfg):
-        import json
-        cfg_path = tmp_path / "cfg.json"
-        cfg_path.write_text(json.dumps(cfg))
+        # dict => write it out as a config file; str => use an existing file
+        # (lets the shipped template go through the same code path)
+        if isinstance(cfg, str):
+            cfg_path = cfg
+        else:
+            cfg_path = tmp_path / "cfg.json"
+            cfg_path.write_text(json.dumps(cfg))
         workdir = tmp_path / "wd"
         workdir.mkdir(exist_ok=True)
         image, gen_pw = ff.build_nvs_image(str(cfg_path), str(workdir))
@@ -159,6 +164,62 @@ def test_nvs_no_password_no_auth_rows(nvs_image):
     rows, _, _ = nvs_image({"sta_ssid": "lab"})
     for k in ("auth_user", "auth_hash", "auth_salt", "hash_ver", "auth_init"):
         assert k not in rows
+
+
+# --- the shipped seed template ---------------------------------------------
+
+# --- the shipped seed template ---------------------------------------------
+
+def test_template_passes_validation_and_seeds_nothing(nvs_image):
+    """tools/config_template.json is the file everyone copies for --config, so
+    it must parse and survive every length check in build_nvs_image. Its values
+    are firmware defaults and it sets no password, so a board flashed with it
+    unchanged must still come up in setup mode — no auth rows at all."""
+    rows, (image, gen_pw), _ = nvs_image(ff.DEFAULT_CONFIG_TEMPLATE)
+    assert image.endswith("nvs.bin")
+    assert gen_pw is None
+    for k in ("auth_user", "auth_hash", "auth_salt", "hash_ver", "auth_init"):
+        assert k not in rows
+    # Keys are copied verbatim into NVS; underscore-prefixed note keys are the
+    # template's own device and must not leak in
+    assert not any(k.startswith("_") for k in rows)
+
+
+def test_template_keys_are_all_effective(nvs_image, tmp_path):
+    """A typo'd key in the template silently does nothing — the worst failure
+    mode for a file everyone copies. Fill every template key with a distinctive
+    value and require each one to leave a trace in the generated NVS rows."""
+    with open(ff.DEFAULT_CONFIG_TEMPLATE) as f:
+        cfg = json.load(f)
+    assert len(cfg) > 1, "template lost its keys"
+
+    markers = {"sta_ssid": "t-ssid", "sta_pass": "t-pass", "ap_ssid": "t-ap",
+               "ap_pass": "templatepw", "device_name": "t-name",
+               "ntp_server": "t.ntp", "timezone": "UTC0", "baud_rate": 921600,
+               "power_on_default": False, "username": "t-user",
+               "password": "template-test-pw", "force_password_change": True}
+    assert set(cfg) - {"_comment"} == set(markers), \
+        "template gained or lost a key — update the marker table"
+    cfg.update(markers)
+
+    seeded = tmp_path / "seeded.json"
+    seeded.write_text(json.dumps(cfg))
+    rows, (_, gen_pw), _ = nvs_image(str(seeded))
+
+    values = {r[3] for r in rows.values()}
+    for key, marker in markers.items():
+        if key in ("password", "force_password_change"):
+            continue  # checked via the auth rows below
+        if isinstance(marker, bool):
+            assert rows["power_on"] == ("power_on", "data", "u8", "0")
+        elif isinstance(marker, int):
+            assert rows["baud_rate"] == ("baud_rate", "data", "u32", str(marker))
+        else:
+            assert marker in values, f"template key {key!r} has no effect"
+    # password + force_password_change together: hashed custom user, setup lock on
+    assert gen_pw is None
+    assert rows["auth_user"] == ("auth_user", "data", "string", "t-user")
+    assert rows["auth_init"] == ("auth_init", "data", "u8", "0")
 
 
 @pytest.mark.parametrize("cfg,frag", [

@@ -60,6 +60,10 @@ tools/
                       vX.Y.Z-factory companion prerelease (bootloader+partitions+app,
                       merged via idf.py merge-bin in CI), flashes at 0x0; optional
                       --config pre-seeds NVS (webterm namespace)
+  config_template.json - Seed template for --config: every supported key at its
+                      firmware default; "_"-prefixed keys are ignored so it can carry
+                      notes. If config.c gains a config key, add it here too —
+                      tests/tools fails on template/tool key drift
 tests/
   host/             - Host unit tests (Unity + stubbed IDF headers, no ESP-IDF):
                       `make -C tests/host test`. Covers config crypto (vs OpenSSL),

@@ -5,6 +5,8 @@ managed_components/
 dependencies.lock
 certs/server.crt
 certs/server.key
+# Local factory_flash.py --config seed files: these hold real WiFi/admin passwords
+configs/
 hardware/
 *.bin
 __pycache__/

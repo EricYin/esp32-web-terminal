@@ -105,9 +105,21 @@ tools/factory_flash.py -p /dev/ttyUSB0 --local    # flash your own idf.py build
 
 The device boots unconfigured and goes through the normal first-time setup
 below. Optionally, `--config seed.json` pre-seeds settings (device name, WiFi,
-admin password, timezone, baud) into NVS so the device comes up ready to use —
-run `tools/factory_flash.py --help` and see the script header for the format
-(requires `pip install esp-idf-nvs-partition-gen`).
+admin password, timezone, baud) into NVS so the device comes up ready to use
+(requires `pip install esp-idf-nvs-partition-gen`). Start from
+[`tools/config_template.json`](tools/config_template.json) — copy it, edit it,
+and pass it as the seed file; its values are the firmware defaults, so keys you
+leave alone change nothing:
+
+```bash
+cp tools/config_template.json my-seed.json && $EDITOR my-seed.json
+tools/factory_flash.py -p /dev/ttyUSB0 --config my-seed.json
+```
+
+Set `"password"` to any value (or `"random"` to have one generated and printed
+once) to skip first-time setup; leave it empty and the board still boots into
+setup mode. Run `tools/factory_flash.py --help` or see the script header for
+the full key format.
 
 ### First-Time Setup
 
@@ -254,7 +266,8 @@ hardware/
 certs/
   generate_cert.sh  Generates self-signed ECC P-256 cert
 tools/
-  factory_flash.py  Flash a release factory image without an ESP-IDF install
+  factory_flash.py       Flash a release factory image without an ESP-IDF install
+  config_template.json   Seed template for factory_flash.py --config
 ```
 
 ## Contributing

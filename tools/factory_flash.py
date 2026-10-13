@@ -19,7 +19,9 @@
 #   factory_flash.py -p /dev/ttyUSB0 --file factory.bin   # flash a downloaded image
 #   factory_flash.py -p /dev/ttyUSB0 --config dev.json    # also pre-seed NVS config
 #
-# --config JSON format (every key optional; omitted keys keep firmware defaults):
+# --config JSON format (every key optional; omitted keys keep firmware defaults;
+# keys beginning with "_" are ignored so the file can carry notes). A starter
+# lives in tools/config_template.json — it holds exactly the firmware defaults:
 #   {
 #     "device_name": "rack-pi-01",             // <=32 chars, also sets hostname/mDNS
 #     "sta_ssid": "mynetwork",                 // WiFi network to join
@@ -65,6 +67,8 @@ AUTH_HASH_LEN = 32
 VALID_BAUDS = {9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600, 1500000}
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# Shipped seed template people copy for --config; referenced by error hints and tests
+DEFAULT_CONFIG_TEMPLATE = os.path.join(SCRIPT_DIR, "config_template.json")
 
 
 def die(msg):
@@ -268,7 +272,8 @@ def main():
     src.add_argument("--file", metavar="BIN",
                      help="flash a local factory image file at 0x0")
     ap.add_argument("--config", metavar="JSON",
-                    help="optionally pre-seed device config (hostname, WiFi, auth, ...) into NVS")
+                    help="optionally pre-seed device config (hostname, WiFi, auth, ...) "
+                         "into NVS; see tools/config_template.json for a starter file")
     ap.add_argument("--no-erase", action="store_true",
                     help="skip the full flash erase (keeps any existing config)")
     args = ap.parse_args()
@@ -280,6 +285,9 @@ def main():
         nvs_image = None
         generated_password = None
         if args.config:
+            if not os.path.isfile(args.config):
+                die(f"{args.config} not found — copy tools/config_template.json and edit it")
+            print(f"Pre-seeding NVS from {args.config}...")
             nvs_image, generated_password = build_nvs_image(args.config, workdir)
 
         erase_args = [] if args.no_erase else ["--erase-all"]

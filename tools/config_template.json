@@ -1,0 +1,15 @@
+{
+  "_comment": "Seed template for factory_flash.py --config. Copy it, edit it, then flash: factory_flash.py -p /dev/ttyUSB0 --config my-seed.json. Every key is optional and the values below are the firmware defaults, so flashing this file unchanged behaves like flashing without --config (the board still boots into first-time setup). Keys beginning with \"_\" are ignored, so your copy can carry notes. See the factory_flash.py header for per-key limits.",
+  "device_name": "ESP32 Terminal",
+  "sta_ssid": "",
+  "sta_pass": "",
+  "ap_ssid": "ESP-Terminal",
+  "ap_pass": "esp32term",
+  "username": "admin",
+  "password": "",
+  "force_password_change": false,
+  "baud_rate": 115200,
+  "power_on_default": true,
+  "ntp_server": "",
+  "timezone": "UTC0"
+}
