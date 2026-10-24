@@ -12,6 +12,7 @@
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
 #include <time.h>
+#include "auto_interact.h"
 
 static const char *TAG = "main";
 
@@ -125,4 +126,6 @@ void app_main(void)
         ESP_LOGI(TAG, "Access terminal at: https://%s/", wifi.sta_ip);
     }
     ESP_LOGI(TAG, "AP mode available at: https://%s/", wifi.ap_ip);
+
+    auto_interact_init(); 
 }
