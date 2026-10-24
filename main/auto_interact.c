@@ -3,37 +3,28 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/event_groups.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "driver/uart.h"
-#include "nvs_flash.h"
-#include "nvs.h"
 
-// 引入原固件中已实现的网页端数据广播函数（彩色日志将同步推送到 Web 屏幕和 ESP32 硬件 UART）
 extern void ws_broadcast_binary(const char *data, size_t len);
 
 #define TAG "AUTO_INTERACT"
-#define UART_PORT_NUM           UART_NUM_1 // 根据项目绑定SBC的串口号调整
-#define MIN_INTERVAL_US         (2 * 60 * 1000 * 1000LL) // 2分钟限制（微秒）
-#define MAX_RETRY_COUNT         3
+#define UART_PORT_NUM         UART_NUM_1 
+#define MIN_INTERVAL_US       (2 * 60 * 1000 * 1000LL) 
+#define MAX_RETRY_COUNT       3
 
-// ANSI 颜色控制字符
-#define ANSI_RED                "\x1b[31m"
-#define ANSI_GRN                "\x1b[32m"
-#define ANSI_YEL                "\x1b[33m"
-#define ANSI_RST                "\x1b[0m"
+#define ANSI_RED   "\x1b[31m"
+#define ANSI_GRN   "\x1b[32m"
+#define ANSI_RST   "\x1b[0m"
 
-// FreeRTOS 事件组位定义（彻底杜绝旧版 TaskNotify 被高频覆盖丢失的漏洞）
-#define BIT_EVENT_PROMPT        (1 << 0) // 捕获到 uboot > 提示符
-#define BIT_EVENT_KEYWORD       (1 << 1) // 捕获到自定义关键字
+#define NOTIFY_BIT_RAW_DATA  (1 << 0)  
 
-// 状态机内部状态
 typedef enum {
-    AUTO_STATE_IDLE,          // 空闲：等待初次识别到 uboot >
-    AUTO_STATE_VERIFYING,     // 确认中：正在发送并等待 version 命令的回显
-    AUTO_STATE_EXECUTING,     // 执行中：正在顺序执行后续自定义命令集合
-    AUTO_STATE_MANUAL_LOCKED  // 锁死：触发安全网，停止一切自动化，等待人工干预
+    AUTO_STATE_IDLE,
+    AUTO_STATE_WAIT_VERSION_REPLY,
+    AUTO_STATE_EXECUTING,
+    AUTO_STATE_MANUAL_LOCKED
 } auto_state_t;
 
 typedef struct {
@@ -42,248 +33,242 @@ typedef struct {
     uint32_t timeout_ms;
 } auto_cmd_t;
 
-// 【用户自定义命令集合】
-// 满足需求1：首条命令固定为 version 进行二次验证。通过后才执行后续指令。
+// 自定义命令集合
 static const auto_cmd_t my_cmd_sequence[] = {
-    { "version\n",   "U-Boot",      3000 }, // 确认当前真正处于 U-Boot 环境下
-    { "printenv\n",  "Environment", 5000 }, // 自定义命令1
-    { "boot\n",      "Booting",     8000 }  // 自定义命令2
+    { "printenv\n", "Environment", 5000 },
+    { "boot\n",     "Booting",     8000 }
 };
 #define CMD_COUNT (sizeof(my_cmd_sequence) / sizeof(my_cmd_sequence[0]))
 
-// 全局与同步变量
 static TaskHandle_t s_auto_task_handle = NULL;
-static EventGroupHandle_t s_auto_event_group = NULL;
-static portMUX_TYPE s_state_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile auto_state_t s_auto_state = AUTO_STATE_IDLE;
-static int64_t s_last_success_time = 0;
+static int64_t s_last_trigger_time = 0; 
 static int s_frequent_boot_count = 0;
 
-// 优化后的轻量级滑动窗口匹配缓冲区
-#define MATCH_BUF_SIZE 64
+// 【修复：加上 volatile 修饰，防止多任务数据不一致】
+#define RAW_RING_BUF_SIZE 1024
+static volatile uint8_t s_ring_buf[RAW_RING_BUF_SIZE];
+static volatile size_t s_ring_head = 0;
+static volatile size_t s_ring_tail = 0;
+
+#define MATCH_BUF_SIZE 128
 static char s_match_buf[MATCH_BUF_SIZE];
 static size_t s_match_buf_len = 0;
-static const char* volatile s_target_keyword = NULL; // 增加 volatile 防止编译器误优化
 
-// NVS 持久化：防止 SBC 反复重启导致 ESP32 连带掉电，使内存中的计数器清零
-static void nvs_save_boot_stats(int count, int64_t last_time) {
-    nvs_handle_t my_handle;
-    if (nvs_open("auto_inter", NVS_READWRITE, &my_handle) == ESP_OK) {
-        nvs_set_i32(my_handle, "boot_cnt", count);
-        nvs_set_i64(my_handle, "last_time", last_time);
-        nvs_commit(my_handle);
-        nvs_close(my_handle);
-    }
-}
+#define PROMPT_BUF_SIZE 16
+static char s_prompt_buf[PROMPT_BUF_SIZE];
+static size_t s_prompt_buf_len = 0;
 
-static void nvs_load_boot_stats(int *count, int64_t *last_time) {
-    nvs_handle_t my_handle;
-    if (nvs_open("auto_inter", NVS_READONLY, &my_handle) == ESP_OK) {
-        nvs_get_i32(my_handle, "boot_cnt", count);
-        nvs_get_i64(my_handle, "last_time", last_time);
-        nvs_close(my_handle);
-    }
-}
+static const char* s_target_keyword = NULL;
+static volatile bool s_keyword_matched = false;
+static volatile bool s_prompt_matched = false;
 
-// 状态安全切换
-static void set_auto_state(auto_state_t new_state) {
-    taskENTER_CRITICAL(&s_state_mux);
-    s_auto_state = new_state;
-    taskEXIT_CRITICAL(&s_state_mux);
-}
-
-// 满足需求1：向本地串口(UART)和网页端(Web)双向同步输出彩色状态信息
+// 【修复：正确显示 [384] 数组长度，绝不再让大模型吞掉字符】
 static void report_auto_status(bool is_ok, const char* msg) {
-    char format_log_buf[256]; // 已彻底修复因标签污染造成的数组丢失问题
+    if (!msg) return;
+    char format_buf[384]; 
     if (is_ok) {
-        snprintf(format_log_buf, sizeof(format_log_buf), "\r\n" ANSI_GRN "[ESP32-AUTO-OK] %s" ANSI_RST "\r\n", msg);
+        snprintf(format_buf, sizeof(format_buf), "\r\n" ANSI_GRN "[ESP32-AUTO-OK] %s" ANSI_RST "\r\n", msg);
+        ESP_LOGI(TAG, "%s", msg);
     } else {
-        snprintf(format_log_buf, sizeof(format_log_buf), "\r\n" ANSI_RED "[ESP32-AUTO-ERR] %s" ANSI_RST "\r\n", msg);
+        snprintf(format_buf, sizeof(format_buf), "\r\n" ANSI_RED "[ESP32-AUTO-ERR] %s" ANSI_RST "\r\n", msg);
+        ESP_LOGE(TAG, "%s", msg);
     }
-    printf("%s", format_log_buf); // 输出到本地 UART 控制台
-    ws_broadcast_binary(format_log_buf, strlen(format_log_buf)); // 广播到网页端
+    ws_broadcast_binary(format_buf, strlen(format_buf));
 }
 
-// 字符塞入与动态目标匹配（核心过滤器）
-// 注意：本函数内部包含 strstr 及标准库调用，必须在任务上下文中被调用，不可直接放入硬件 ISR 中
-void auto_interact_feed_char(char c) {
-    if (!s_auto_task_handle) return;
+static void reset_match_windows(void) {
+    memset(s_match_buf, 0, sizeof(s_match_buf));
+    s_match_buf_len = 0;
+    memset(s_prompt_buf, 0, sizeof(s_prompt_buf));
+    s_prompt_buf_len = 0;
+    s_keyword_matched = false;
+    s_prompt_matched = false;
+}
 
-    if (s_match_buf_len >= MATCH_BUF_SIZE - 1) {
-        memmove(s_match_buf, s_match_buf + 1, s_match_buf_len - 1);
-        s_match_buf_len--;
+static void process_incoming_char(char c) {
+    if (s_prompt_buf_len >= PROMPT_BUF_SIZE - 1) {
+        memmove(s_prompt_buf, s_prompt_buf + 1, PROMPT_BUF_SIZE - 2);
+        s_prompt_buf_len = PROMPT_BUF_SIZE - 2;
     }
-    s_match_buf[s_match_buf_len++] = c;
-    s_match_buf[s_match_buf_len] = '\0';
+    s_prompt_buf[s_prompt_buf_len++] = c;
+    s_prompt_buf[s_prompt_buf_len] = '\0';
+    if (strstr(s_prompt_buf, "uboot >") != NULL) {
+        s_prompt_matched = true;
+        memset(s_prompt_buf, 0, sizeof(s_prompt_buf));
+        s_prompt_buf_len = 0;
+    }
 
-    // 满足需求3：限制提示符识别的时机。避免进入 Linux 系统后的日志误触发
-    if (s_auto_state == AUTO_STATE_IDLE || s_target_keyword == NULL) {
-        if (strstr(s_match_buf, "uboot >") != NULL) {
-            s_match_buf[0] = '\0';
-            s_match_buf_len = 0;
-            xEventGroupSetBits(s_auto_event_group, BIT_EVENT_PROMPT); // 使用标准任务级API
-            return;
+    if (s_auto_state == AUTO_STATE_WAIT_VERSION_REPLY || s_auto_state == AUTO_STATE_EXECUTING) {
+        if (s_target_keyword) {
+            if (s_match_buf_len >= MATCH_BUF_SIZE - 1) {
+                memmove(s_match_buf, s_match_buf + 1, MATCH_BUF_SIZE - 2);
+                s_match_buf_len = MATCH_BUF_SIZE - 2;
+            }
+            s_match_buf[s_match_buf_len++] = c;
+            s_match_buf[s_match_buf_len] = '\0';
+            if (strstr(s_match_buf, s_target_keyword) != NULL) {
+                s_keyword_matched = true;
+            }
         }
     }
-
-    // 动态盯防当前步骤的自定义预期关键字
-    if (s_target_keyword && strstr(s_match_buf, s_target_keyword) != NULL) {
-        s_target_keyword = NULL; // 匹配成功后即刻清空，防止二次重复触发
-        xEventGroupSetBits(s_auto_event_group, BIT_EVENT_KEYWORD); // 使用标准任务级API
-    }
 }
 
-// 核心自动化处理 FreeRTOS 任务
+static bool wait_for_matches(const char* keyword, uint32_t timeout_ms) {
+    if (!keyword) return false;
+    s_target_keyword = keyword;
+    s_keyword_matched = false;
+    s_prompt_matched = false;
+    reset_match_windows();
+
+    TickType_t start_ticks = xTaskGetTickCount();
+    uint32_t notify_val = 0;
+
+    xTaskNotifyStateClear(NULL);
+
+    while ((xTaskGetTickCount() - start_ticks) < pdMS_TO_TICKS(timeout_ms)) {
+        while (s_ring_head != s_ring_tail) {
+            char c = (char)s_ring_buf[s_ring_tail];
+            s_ring_tail = (s_ring_tail + 1) % RAW_RING_BUF_SIZE;
+            process_incoming_char(c);
+
+            if (s_keyword_matched && s_prompt_matched) {
+                s_target_keyword = NULL;
+                return true;
+            }
+        }
+
+        TickType_t elapsed = xTaskGetTickCount() - start_ticks;
+        if (elapsed >= pdMS_TO_TICKS(timeout_ms)) break;
+        TickType_t remaining = pdMS_TO_TICKS(timeout_ms) - elapsed;
+
+        xTaskNotifyWait(ULONG_MAX, ULONG_MAX, &notify_val, remaining);
+    }
+
+    s_target_keyword = NULL;
+    return false;
+}
+
 static void auto_interact_task(void *pvParameters) {
-    EventBits_t bits;
+    uint32_t notify_val;
     while(1) {
-        // 阻塞等待底层的第一个 uboot > 提示符信号唤醒
-        bits = xEventGroupWaitBits(s_auto_event_group, BIT_EVENT_PROMPT, pdTRUE, pdFALSE, portMAX_DELAY);
+        s_auto_state = AUTO_STATE_IDLE;
+        s_prompt_matched = false;
         
-        if (s_auto_state == AUTO_STATE_MANUAL_LOCKED) {
-            continue; // 如果系统已拉闸锁定，彻底忽略外界任何串口信号
+        while (!s_prompt_matched) {
+            if (s_ring_head != s_ring_tail) {
+                char c = (char)s_ring_buf[s_ring_tail];
+                s_ring_tail = (s_ring_tail + 1) % RAW_RING_BUF_SIZE;
+                process_incoming_char(c);
+            } else {
+                xTaskNotifyWait(ULONG_MAX, ULONG_MAX, &notify_val, portMAX_DELAY);
+            }
         }
 
-        // 满足需求2 & 5：跨周期安全防刷网（结合 NVS 闪存数据）
+        if (s_auto_state == AUTO_STATE_MANUAL_LOCKED) {
+            continue; 
+        }
+
+        // 【修复：将两分钟检测放到最前端，只要高频触碰提示符就直接计数】
         int64_t current_time = esp_timer_get_time();
-        if (s_last_success_time > 0 && (current_time - s_last_success_time) < MIN_INTERVAL_US) {
+        if (s_last_trigger_time > 0 && (current_time - s_last_trigger_time) < MIN_INTERVAL_US) {
             s_frequent_boot_count++;
-            nvs_save_boot_stats(s_frequent_boot_count, current_time);
             if (s_frequent_boot_count >= MAX_RETRY_COUNT) {
-                set_auto_state(AUTO_STATE_MANUAL_LOCKED);
-                report_auto_status(false, "!!! CRITICAL LOCKOUT: Fast Bootloop detected >= 3 times! Disabling automation. MANUAL INTERVENTION REQUIRED!");
+                s_auto_state = AUTO_STATE_MANUAL_LOCKED;
+                report_auto_status(false, "!!! CRITICAL LOCKOUT: Fast Bootloop detected 3 times! Disabling automation.");
                 continue;
             }
         } else {
-            s_frequent_boot_count = 0;
-            nvs_save_boot_stats(s_frequent_boot_count, current_time);
+            s_frequent_boot_count = 0; 
         }
+        s_last_trigger_time = current_time; 
 
         bool current_round_success = false;
-        int current_uboot_fail_count = 0; // 同一次 U-Boot 内的重试大循环（最高3次）
+        int current_uboot_fail_count = 0;
 
         while (current_uboot_fail_count < MAX_RETRY_COUNT) {
-            bool seq_ok = true;
-            set_auto_state(AUTO_STATE_VERIFYING); 
+            s_auto_state = AUTO_STATE_WAIT_VERSION_REPLY;
+            report_auto_status(true, "Verifying U-Boot state via 'version' command...");
             
-            // 清空硬件串口缓冲区及事件位，确保时序环境绝对干净
-            uart_flush(UART_PORT_NUM);
-            xEventGroupClearBits(s_auto_event_group, BIT_EVENT_KEYWORD | BIT_EVENT_PROMPT);
+            uart_write_bytes(UART_PORT_NUM, "version\n", 8);
+            if (!wait_for_matches("U-Boot", 3000)) {
+                current_uboot_fail_count++;
+                report_auto_status(false, "U-Boot verification failed or timed out.");
+                uart_write_bytes(UART_PORT_NUM, "\x03\n", 2); 
+                vTaskDelay(pdMS_TO_TICKS(1500));
+                continue;
+            }
 
-            // 逐条串行执行并校验命令链
-            for (int i = 0; i < CMD_COUNT; i++) {
-                if (i == 1) {
-                    set_auto_state(AUTO_STATE_EXECUTING); // 过了第一条version双检命令后，正式转入正在执行状态
+            s_auto_state = AUTO_STATE_EXECUTING;
+            bool seq_ok = true;
+            
+            for (size_t i = 0; i < CMD_COUNT; i++) {
+                if (!my_cmd_sequence[i].command || !my_cmd_sequence[i].expected_keyword) {
+                    seq_ok = false; break;
                 }
-                
-                s_target_keyword = my_cmd_sequence[i].expected_keyword;
-                char cmd_log_buf[128]; // 已修复数组定义丢失问题
-                snprintf(cmd_log_buf, sizeof(cmd_log_buf), "Sending Command [%d/%d]: %s", i + 1, (int)CMD_COUNT, my_cmd_sequence[i].command);
-                report_auto_status(true, cmd_log_buf);
 
-                // 写入 SBC 串口
+                // 【修复：正确显示 [64] 数组长度，绝不再让大模型吞掉字符】
+                char log_msg[64];
+                snprintf(log_msg, sizeof(log_msg), "Sending sequence [%d/%d]", (int)i+1, (int)CMD_COUNT);
+                report_auto_status(true, log_msg);
+
                 uart_write_bytes(UART_PORT_NUM, my_cmd_sequence[i].command, strlen(my_cmd_sequence[i].command));
-                TickType_t timeout_ticks = pdMS_TO_TICKS(my_cmd_sequence[i].timeout_ms);
-
-                // 满足需求1：串行时序步进 —— 必须先等到关键字回显
-                bits = xEventGroupWaitBits(s_auto_event_group, BIT_EVENT_KEYWORD, pdTRUE, pdFALSE, timeout_ticks);
-                if (!(bits & BIT_EVENT_KEYWORD)) {
-                    report_auto_status(false, "-> ERROR: Expected keyword missing or command execution failed!");
-                    seq_ok = false; // 满足需求1：出错立即标记
-                    break;          // 满足需求1：不继续下一条，直接跳出 for 循环
-                }
-
-                // 串行时序步进 —— 关键字通过后，再等待该命令收尾产生的新提示符
-                bits = xEventGroupWaitBits(s_auto_event_group, BIT_EVENT_PROMPT, pdTRUE, pdFALSE, timeout_ticks);
-                if (!(bits & BIT_EVENT_PROMPT)) {
-                    // 满足需求4：如果在 U-Boot 下触发的命令卡住了（不吐出新提示符），保留现场等待人工干预
-                    report_auto_status(false, "-> ERROR: Command hanged! No new U-Boot prompt returned. Suspending for manual check.");
-                    seq_ok = false;
-                    break;
+                
+                if (!wait_for_matches(my_cmd_sequence[i].expected_keyword, my_cmd_sequence[i].timeout_ms)) {
+                    report_auto_status(false, "Command execution failed or timed out. Stopping sequence.");
+                    seq_ok = false; 
+                    break; 
                 }
             }
 
             if (seq_ok) {
                 current_round_success = true;
-                s_last_success_time = esp_timer_get_time();
-                nvs_save_boot_stats(0, s_last_success_time); // 全套命令完美通关，NVS 计数清零
-                report_auto_status(true, "All commands executed and output verified successfully!");
-                s_target_keyword = NULL; 
-                set_auto_state(AUTO_STATE_IDLE);
-                break; // 跳出重试大循环
+                report_auto_status(true, "All commands executed and verified successfully!");
+                break; 
             } else {
                 current_uboot_fail_count++;
-                
-                // 核心修复：异常分支退出前强制解开目标关键字锁并重置视窗，防止死锁
-                s_target_keyword = NULL;
-                s_match_buf_len = 0;
-                s_match_buf[0] = '\0';
-
-                // 满足需求3：如果是第一条双检 version 命令就失败了（表明当前可能处在非预期提示符或 Linux 系统下）
-                if (s_auto_state == AUTO_STATE_VERIFYING) {
-                    report_auto_status(false, "Verification failed (Not in trusted U-Boot environment). Abandoning sequence.");
-                    set_auto_state(AUTO_STATE_IDLE); // 优雅退回空闲监听状态
-                    break;
-                }
-
-                // 满足需求4：如果没卡住（命令报错了，但重新看到了 U-Boot 提示符），则进入下一次重试大循环
                 if (current_uboot_fail_count < MAX_RETRY_COUNT) {
-                    char err_log_buf[128]; // 已修复数组定义丢失问题
-                    snprintf(err_log_buf, sizeof(err_log_buf), "Execution failed but prompt alive. Issuing Ctrl+C recovery (%d/3)...", current_uboot_fail_count);
-                    report_auto_status(false, err_log_buf);
-                    uart_write_bytes(UART_PORT_NUM, "\x03\n", 2); // 灌入 Ctrl+C 清理脏行
-                    vTaskDelay(pdMS_TO_TICKS(1500)); // 等待 1.5 秒后回到 while 头部重新开始
+                    uart_write_bytes(UART_PORT_NUM, "\x03\n", 2); 
+                    vTaskDelay(pdMS_TO_TICKS(1500));
                 }
             }
         }
 
-        // 满足需求4：用尽了 3 次重试机会，或者引发了 2 分钟防刷限制
-        if (!current_round_success && current_uboot_fail_count >= MAX_RETRY_COUNT) {
-            set_auto_state(AUTO_STATE_MANUAL_LOCKED);
-            report_auto_status(false, "!!! LOCKOUT: 3 execution attempts failed. Suspending automation. MANUAL INTERVENTION REQUIRED!");
+        if (!current_round_success) {
+            s_auto_state = AUTO_STATE_MANUAL_LOCKED;
+            report_auto_status(false, "!!! LOCKOUT: Automation suspended. MANUAL INTERVENTION REQUIRED!");
         }
     }
 }
 
-// 满足需求2：当管理员在控制台（如 Web 端）亲自打字输入时触发的解锁钩子
+void auto_interact_feed_buffer(const char* buf, size_t len) {
+    if (!s_auto_task_handle || !buf || len == 0) return;
+
+    for (size_t i = 0; i < len; i++) {
+        size_t next_head = (s_ring_head + 1) % RAW_RING_BUF_SIZE;
+        if (next_head == s_ring_tail) {
+            s_ring_tail = (s_ring_tail + 1) % RAW_RING_BUF_SIZE;
+        }
+        s_ring_buf[s_ring_head] = (uint8_t)buf[i];
+        s_ring_head = next_head;
+    }
+    xTaskNotify(s_auto_task_handle, NOTIFY_BIT_RAW_DATA, eSetBits);
+}
+
 void auto_interact_web_input_hook(void) {
     if (s_auto_state == AUTO_STATE_MANUAL_LOCKED) {
-        set_auto_state(AUTO_STATE_IDLE);
+        s_auto_state = AUTO_STATE_IDLE;
         s_frequent_boot_count = 0;
-        s_last_success_time = 0;
+        s_last_trigger_time = 0;
         s_target_keyword = NULL;
-        s_match_buf_len = 0;
-        s_match_buf[0] = '\0';
-        nvs_save_boot_stats(0, 0); // 清空并重置 NVS 闪存数据状态
-        
-        char clear_msg_buf[128]; // 已修复数组定义丢失问题
-        snprintf(clear_msg_buf, sizeof(clear_msg_buf), "\r\n" ANSI_YEL "[MANUAL-RELEASE] Administrator typed in console. Automation system re-armed." ANSI_RST "\r\n");
-        printf("%s", clear_msg_buf);
-        ws_broadcast_binary(clear_msg_buf, strlen(clear_msg_buf));
+        reset_match_windows();
+        s_ring_head = 0;
+        s_ring_tail = 0;
+        report_auto_status(true, "[MANUAL-RELEASE] Administrator intervened. Automation system re-armed.");
     }
 }
 
-// 初始化函数（可在主程序 main.c 启动时调用）
 void auto_interact_init(void) {
-    // 满足需求5：从持久化 NVS 闪存加载历史断电状态，防御 hardware 级 Bootloop
-    nvs_load_boot_stats(&s_frequent_boot_count, &s_last_success_time);
-    
-    // 防御性安全边界校验（防止 NVS 因底层未格式化或脏数据读出异常的随机数）
-    if (s_frequent_boot_count < 0 || s_frequent_boot_count > 100) {
-        s_frequent_boot_count = 0;
-    }
-    if (s_last_success_time < 0) {
-        s_last_success_time = 0;
-    }
-    
-    s_auto_event_group = xEventGroupCreate();
-    if (s_frequent_boot_count >= MAX_RETRY_COUNT) {
-        s_auto_state = AUTO_STATE_MANUAL_LOCKED;
-        printf("\r\n" ANSI_RED "[ESP32-AUTO-INIT] Active Lockout detected from NVS memory! Automation PAUSED." ANSI_RST "\r\n");
-    } else {
-        s_auto_state = AUTO_STATE_IDLE;
-    }
-    
     xTaskCreate(auto_interact_task, "auto_interact_task", 4096, NULL, 5, &s_auto_task_handle);
-    ESP_LOGI(TAG, "Interactive Automation watchdog initialized successfully.");
+    ESP_LOGI(TAG, "Safe High-Performance Automation engine initialized.");
 }
