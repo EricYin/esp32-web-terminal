@@ -158,6 +158,7 @@ static void auto_interact_task(void *pvParameters) {
                 g_last_exec_us = now; // 记录本次交互尝试的时间戳
                 
                 // 条件三：发送二次验证命令（例如 version）
+                auto_interact_reset_buffer()
                 ESP_LOGI(TAG, "Sending validation command...");
                 serial_port_write((const uint8_t*)g_profile.validate_cmd, strlen(g_profile.validate_cmd));
                 
