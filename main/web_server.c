@@ -31,7 +31,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
-include "auto_interact.h"
+include "auto_interact.h"auto_interact_web_input_hook();
 // NTP status from main.c
 extern const char *ntp_get_server(void);
 extern bool ntp_is_synced(void);
