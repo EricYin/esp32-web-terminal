@@ -8,6 +8,7 @@ set(SRCS
     "web_server.c"
     "gpio_control.c"
     "ota_github.c"
+    "auto_interact.c"
 )
 
 if(CONFIG_IDF_TARGET_ESP32S3)
