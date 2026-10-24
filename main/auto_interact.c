@@ -30,6 +30,9 @@ static const char* uboot_cmds[] = {
     "echo Hello From ESP32 Auto Interact\n"
 };
 
+static const char *error_keywords[] = {"err", "fail", "exception"};
+static const size_t error_keywords_count = sizeof(error_keywords) / sizeof(error_keywords[0]);
+    
 static const interact_profile_t g_profile = {
     .target_prompt = "uboot >",
     .validate_cmd = "version\n",
@@ -78,6 +81,105 @@ bool auto_interact_is_locked_out(void) {
     return g_is_locked_out;
 }
 
+#include <ctype.h>
+
+// 【新增】将环形缓冲区内容完整线性化复制到临时 buffer 中，方便进行全局关键字检索
+static void rb_snapshot_to_linear(char *dest, size_t *out_len) {
+    uint32_t current_head = g_rb.head;
+    size_t len = current_head > BUFFER_SIZE ? BUFFER_SIZE : current_head;
+    
+    for (size_t i = 0; i < len; i++) {
+        uint32_t idx = current_head - len + i;
+        dest[i] = (char)g_rb.storage[idx & BUFFER_MASK];
+    }
+    dest[len] = '\0';
+    if (out_len) *out_len = len;
+}
+
+// 【新增】不区分大小写的子串查找，用于匹配 err, fail, exception
+static const char* strcasestr_custom(const char *haystack, const char *needle) {
+    if (!*needle) return haystack;
+    for (; *haystack; haystack++) {
+        if (tolower((unsigned char)*haystack) == tolower((unsigned char)*needle)) {
+            const char *h, *n;
+            for (h = haystack, n = needle; *h && *n; h++, n++) {
+                if (tolower((unsigned char)*h) != tolower((unsigned char)*n)) break;
+            }
+            if (!*n) return haystack;
+        }
+    }
+    return NULL;
+}
+
+// 【核心重构】等待 U-Boot 响应函数
+// 结束条件：看到 uboot 提示符为结尾；结束后检查缓冲区是否含有错误字串。
+// 例外逻辑：最后一条命令超时视为成功；若超时且没有停留在 uboot 提示符则设为失败。
+static bool wait_for_response(const char* expected_prompt, uint32_t timeout_ms, bool is_last_cmd) {
+    size_t prompt_len = strlen(expected_prompt);
+    char *tail_buf = malloc(prompt_len + 1);
+    if (!tail_buf) return false;
+    
+    int64_t start = esp_timer_get_time();
+    bool seen_prompt_at_tail = false;
+    
+    // 非阻塞轮询：检查当前环形缓冲区的“最末尾”是否为指定的提示符
+    while ((esp_timer_get_time() - start) < (timeout_ms * 1000)) {
+        uint32_t current_head = g_rb.head;
+        size_t available = current_head > BUFFER_SIZE ? BUFFER_SIZE : current_head;
+        
+        if (available >= prompt_len) {
+            rb_read_tail(tail_buf, prompt_len);
+            if (strcmp(tail_buf, expected_prompt) == 0) {
+                seen_prompt_at_tail = true;
+                break; // 看到提示符为结尾，立刻退出
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(20)); // 降频检查
+    }
+    free(tail_buf);
+
+    // 全局错误字串提取与检索
+    char *linear_buf = malloc(BUFFER_SIZE + 1);
+    if (!linear_buf) return false;
+    
+    size_t current_len = 0;
+    rb_snapshot_to_linear(linear_buf, &current_len);
+    
+    bool has_error = false;
+    
+    // 使用循环检查缓冲区是否包含任意一个关键字
+    for (size_t i = 0; i < error_keywords_count; i++) {
+        if (strcasestr_custom(linear_buf, error_keywords[i]) != NULL) {
+            has_error = true;
+            break; // 只要匹配到一个错误关键字，立即判定为有错并退出循环
+        }
+    }
+    
+    free(linear_buf);
+
+    // ---- 核心业务逻辑决策矩阵 ----
+    if (seen_prompt_at_tail) {
+        if (is_last_cmd) {
+            ESP_LOGW(TAG, "Last command finished but still in uboot. Treated as FAIL.");
+            return false; 
+        } 
+        if (has_error) {
+            ESP_LOGE(TAG, "Prompt matched at tail, but error keyword detected in buffer!");
+            return false; // 包含错误关键字符串，失败
+        }
+        return true; // 看到提示符为结尾且无错，成功
+    } else {
+        // 未看到提示符（超时）的情况
+        if (is_last_cmd) {
+            ESP_LOGW(TAG, "Last command timed out. Treated as SUCCESS.");
+            return true; // 例外：最后一条命令无错超时，视为成功
+        } else {
+            ESP_LOGE(TAG, "Command timed out and missed the uboot prompt at tail.");
+            return false; // 非最后一条命令超时，失败
+        }
+    }
+}
+
 // 从环形缓冲区反向读取最后 N 个字符拼成线性字符串
 static void rb_read_tail(char *dest, size_t n) {
     uint32_t current_head = g_rb.head;
@@ -86,30 +188,6 @@ static void rb_read_tail(char *dest, size_t n) {
         dest[i] = (char)g_rb.storage[idx & BUFFER_MASK];
     }
     dest[n] = '\0';
-}
-
-// 等待指定字符串响应（非阻塞轮询模式）
-static bool wait_for_response(const char* expected, uint32_t timeout_ms) {
-    size_t len = strlen(expected);
-    if (len > BUFFER_SIZE - 1) return false;
-    
-    char *temp_buf = malloc(len + 1);
-    if (!temp_buf) return false;
-    
-    int64_t start = esp_timer_get_time();
-    bool found = false;
-    
-    while ((esp_timer_get_time() - start) < (timeout_ms * 1000)) {
-        rb_read_tail(temp_buf, len);
-        if (strcmp(temp_buf, expected) == 0) {
-            found = true;
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(20)); // 降频检查
-    }
-    
-    free(temp_buf);
-    return found;
 }
 
 // 2. 核心检测与执行状态机 Task
@@ -177,11 +255,14 @@ static void auto_interact_task(void *pvParameters) {
                         
                         vTaskDelay(pdMS_TO_TICKS(100)); 
                         
-                        // 4. 等待当前命令完成（即再次返回提示符状态）
-                        if (!wait_for_response(g_profile.target_prompt, 5000)) {
-                            ESP_LOGE(TAG, "Command index %d timed out. Aborting sequence.", i);
+                        // 【改动点】动态判定当前循环处理的是否为最后一条命令
+                        bool is_last = (i == (g_profile.cmd_count - 1));
+                        
+                        // 【改动点】将 is_last 标志传入重构后的函数中
+                        if (!wait_for_response(g_profile.target_prompt, 5000, is_last)) {
+                            ESP_LOGE(TAG, "Command index %d failed or timed out unconditionally. Aborting sequence.", (int)i);
                             seq_success = false;
-                            break; // 4. 卡住则停止后续序列，安全停留在当前状态供人工接管
+                            break; 
                         }
                     }
                     
