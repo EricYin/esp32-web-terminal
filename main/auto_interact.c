@@ -11,7 +11,7 @@ extern int serial_port_write(const uint8_t *data, size_t len);
 
 #define TAG "AUTO_INTERACT"
 
-#define BUFFER_SIZE_LOG2    9   // 512 字节环形缓冲区
+#define BUFFER_SIZE_LOG2   11   // 2048 字节环形缓冲区
 #define BUFFER_SIZE         (1 << BUFFER_SIZE_LOG2)
 #define BUFFER_MASK         (BUFFER_SIZE - 1)
 
@@ -105,7 +105,7 @@ static bool wait_for_response(const char* expected, uint32_t timeout_ms) {
             found = true;
             break;
         }
-        vTaskDelay(pdMS_TO_TICKS(50)); // 降频检查
+        vTaskDelay(pdMS_TO_TICKS(20)); // 降频检查
     }
     
     free(temp_buf);
@@ -170,6 +170,7 @@ static void auto_interact_task(void *pvParameters) {
                     bool seq_success = true;
                     // 顺序输入交互命令集合
                     for (size_t i = 0; i < g_profile.cmd_count; i++) {
+                        auto_interact_reset_buffer()
                         ESP_LOGI(TAG, "Sending sequence [%d/%d]: %s", i + 1, g_profile.cmd_count, g_profile.exec_cmds[i]);
                         serial_port_write((const uint8_t*)g_profile.exec_cmds[i], strlen(g_profile.exec_cmds[i]));
                         
@@ -198,8 +199,17 @@ static void auto_interact_task(void *pvParameters) {
     free(prompt_check_buf);
 }
 
+// 新增：发送命令前强行复位缓冲区，防止读到上一次交互残留下来的旧提示符
+void auto_interact_reset_buffer(void) {
+    g_rb.head = 0;
+    memset(g_rb.storage, 0, BUFFER_SIZE);
+}
+
+
 void auto_interact_init(void) {
     memset(&g_rb, 0, sizeof(ring_buf_t));
     // 优先级 5（中等），绑定到 Core 1（避开 WiFi 核心 Core 0），分配 4KB 栈空间
-    xTaskCreatePinnedToCore(auto_interact_task, "auto_interact_task", 4096, NULL, 5, NULL, 1);
+    //xTaskCreatePinnedToCore(auto_interact_task, "auto_interact_task", 4096, NULL, 5, NULL, 1);
+    xTaskCreate( auto_interact_task, "auto_interact_task", 4096, NULL, 5, NULL);
+
 }
