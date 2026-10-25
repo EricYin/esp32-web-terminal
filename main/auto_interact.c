@@ -7,11 +7,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "uart_bridge.h"
-#include "serial_port.h"
 
-// 外部串口发送依赖（适配项目的实际发送函数）
-esp_err_t serial_port_send(int port_index, const uint8_t *data, size_t len);
-//extern esp_err_t uart_bridge_send(int port_index, const uint8_t *data, size_t len);
 
 #define TAG "AUTO_INTERACT"
 
@@ -34,6 +30,7 @@ static const char* exec_cmds[] = {
     "version\n"
 };
 
+static const int PORT_INDEX = 0;
 static const int64_t CHECK_INTERVAL = 10000;  //10 sec
 static const int64_t CHECK_INTERVAL_TICK = (1000LL * CHECK_INTERVAL);
 static const int64_t ALLOWED_TWO_AUTO_CMD_INTERVAL = (120LL * 1000 * 1000); //2 min
@@ -69,7 +66,7 @@ void auto_interact_reset_buffer(void) {
 }
 
 // 1. 同步快速通知函数：无锁、无移动、极快
-void auto_interact_notify_output(const uint8_t *data, size_t len) {
+void auto_interact_rx_notify(const uint8_t *data, size_t len) {
     if (!data || len == 0) return;
     
     // 快速将数据推入环形缓冲区，满则直接覆盖旧数据
@@ -276,7 +273,7 @@ static void auto_interact_task(void *pvParameters) {
         // 条件三：发送二次验证命令（例如 version）
         auto_interact_reset_buffer();
         ESP_LOGI(TAG, "Sending validation command...");
-        serial_port_send(UART_BRIDGE_TX_PIN, (const uint8_t*)g_profile.validate_cmd, strlen(g_profile.validate_cmd));       
+        uart_bridge_send(PORT_INDEX, (const uint8_t*)g_profile.validate_cmd, strlen(g_profile.validate_cmd));       
        
         // 检查二次验证是否通过
         if (wait_for_response(g_profile.validate_response, 150, 3000, false)) {
@@ -287,7 +284,7 @@ static void auto_interact_task(void *pvParameters) {
             for (size_t i = 0; i < g_profile.cmd_count; i++) {
                 auto_interact_reset_buffer();
                 ESP_LOGI(TAG, "Sending sequence [%d/%d]: %s", i + 1, g_profile.cmd_count, g_profile.exec_cmds[i]);
-                serial_port_send(UART_BRIDGE_TX_PIN, (const uint8_t*)g_profile.exec_cmds[i], strlen(g_profile.exec_cmds[i]));                
+                uart_bridge_send(PORT_INDEX, (const uint8_t*)g_profile.exec_cmds[i], strlen(g_profile.exec_cmds[i]));                
                 
                 // 【改动点】动态判定当前循环处理的是否为最后一条命令
                 bool is_last = (i == (g_profile.cmd_count - 1));

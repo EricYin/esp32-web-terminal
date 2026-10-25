@@ -1438,8 +1438,9 @@ esp_err_t web_server_start(void)
     const httpd_uri_t route_tls = { .uri = "/api/tls", .method = HTTP_POST, .handler = handle_tls_upload };
     const httpd_uri_t route_reboot = { .uri = "/api/reboot", .method = HTTP_POST, .handler = handle_esp_reboot };
 
+    //auto interact
     const httpd_uri_t route_auto_interact_config_get = { .uri = "/api/auto_interact_config", .method = HTTP_GET, .handler = handle_auto_interact_config_get };
-    const httpd_uri_t route_auto_interact_config_post = { .uri = "/api/auto_interactconfig", .method = HTTP_POST, .handler = handle_auto_interact_config_post };
+    const httpd_uri_t route_auto_interact_config_post = { .uri = "/api/auto_interact_config", .method = HTTP_POST, .handler = handle_auto_interact_config_post };
 
     /* WebSocket */
     const httpd_uri_t route_ws = { .uri = "/ws", .method = HTTP_GET, .handler = handle_ws, .is_websocket = true };
@@ -1461,6 +1462,8 @@ esp_err_t web_server_start(void)
     httpd_register_uri_handler(s_server, &route_tls);
     httpd_register_uri_handler(s_server, &route_reboot);
     httpd_register_uri_handler(s_server, &route_ws);
+    httpd_register_uri_handler(s_server, &route_auto_interact_config_get);
+    httpd_register_uri_handler(s_server, &route_auto_interact_config_post);
 
     httpd_register_err_handler(s_server, HTTPD_404_NOT_FOUND, handle_404);
 

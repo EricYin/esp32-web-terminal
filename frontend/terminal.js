@@ -27,9 +27,7 @@
     var btnSettings = document.getElementById("btn-settings");
     var loginOverlay = document.getElementById("login-overlay");
     var loginError = document.getElementById("login-error");
-    var settingsOverlay = document.getElementById("settings-overlay");
-    var autoInteractSettingsOverlay = document.getElementById("auto-interact-settings-overlay");
-    var btnAuotInteractSettings = document.getElementById("btn-auto-interact-settings");
+    var settingsOverlay = document.getElementById("settings-overlay"); 
     var terminalContainer = document.getElementById("terminal-container");
 
     // --- Helpers ---
@@ -180,28 +178,30 @@
             }
             wifiStatus.textContent = ws;
         });
+        
+        //auto interact
+        apiRequest("GET", "/api/auto_interact_config", null, function(err, conf) {
+            if (err || !conf) return;
+            document.getElementById("auto-interact-lock").checked = conf.lock;            
+        });
+
     });
 
     document.getElementById("btn-settings-close").addEventListener("click", function() {
         settingsOverlay.classList.add("hidden");
     });
 
-    //auto interact settings
-    var autoInteractSettingsStatus = document.getElementById("auto-interact-settings-status");
-
-    btnAutoInteractSettings.addEventListener("click", function() {
-        autoInteractSettingsOverlay.classList.remove("hidden");
-        autoInteractSettingsStatus.textContent = "";
-        apiRequest("GET", "/api/auto_interact_config", null, function(err, conf) {
-            if (err || !conf) return;
-            document.getElementById("auto-interact-lock-status").checked = conf.lock;            
+    document.getElementById("btn-auto-interact-lock-save").addEventListener("click", function() {
+        var locked = document.getElementById("auto-interact-lock").checked;
+        apiRequest("POST", "/api/auto_interact_config", {lock: locked}, function(err, res) {
+            if (!err && res && res.ok) {
+                showSettingsMsg("Lock status saved");
+            }
+            else {
+                showSettingsMsg((res && res.error) || "Failed", true);
+            }
         });
     });
-
-    document.getElementById("btn-auto-interact-settings-close").addEventListener("click", function() {
-        autoInteractSettingsOverlay.classList.add("hidden");
-    });
-    
 
     document.getElementById("btn-wifi-save").addEventListener("click", function() {
         var ssid = document.getElementById("sta-ssid").value.trim();

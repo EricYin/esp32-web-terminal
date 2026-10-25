@@ -28,7 +28,7 @@ static void uart_rx_task(void *arg)
             serial_port_rx_notify(port_index, buf, len);
             
             //notify auto_interact output data
-            auto_interact_notify_output(buf, len);           
+            auto_interact_rx_notify(buf, len);           
         }
     }
 }

@@ -9,7 +9,7 @@
 void auto_interact_init(void);
 
 // 外部同步调用：通知有新输出输入。必须极快！
-void auto_interact_notify_output(const uint8_t *data, size_t len);
+void auto_interact_rx_notify(const uint8_t *data, size_t len);
 
 // 提供给 Web 页面/外部 API 调用的清除错误锁定状态的函数
 void auto_interact_config_set(bool lock);

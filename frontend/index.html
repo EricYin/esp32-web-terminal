@@ -62,43 +62,43 @@ body {
 }
 #login-box button:hover { opacity: 0.9; }
 #login-error { color: var(--danger); font-size: 13px; margin-bottom: 8px; min-height: 18px; }
-#settings-overlay, #auto-interact-settings-overlay {
+#settings-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,0.7);
     display: flex; align-items: center; justify-content: center; z-index: 999;
 }
-#settings-overlay.hidden, #auto-interact-settings-overlay.hidden { display: none; }
-#settings-box, #auto-interact-settings-box {
+#settings-overlay.hidden { display: none; }
+#settings-box {
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 8px; padding: 24px; width: 380px;
     max-width: 90vw; max-height: 90vh; overflow-y: auto;
 }
-#settings-box, #auto-interact-settings-box h2 { margin-bottom: 16px; font-size: 18px; text-align: center; }
-#settings-box, #auto-interact-settings-box fieldset {
+#settings-box h2 { margin-bottom: 16px; font-size: 18px; text-align: center; }
+#settings-box fieldset {
     border: 1px solid var(--border); border-radius: 4px;
     padding: 12px; margin-bottom: 12px;
 }
-#settings-box, #auto-interact-settings-box legend { font-size: 13px; color: var(--accent); padding: 0 6px; }
-#settings-box, #auto-interact-settings-box input[type="text"], #settings-box input[type="password"] {
+#settings-box legend { font-size: 13px; color: var(--accent); padding: 0 6px; }
+#settings-box input[type="text"], #settings-box input[type="password"] {
     display: block; width: 100%; padding: 8px 12px; margin-bottom: 8px;
     border: 1px solid var(--border); border-radius: 4px;
     background: var(--bg); color: var(--text); font-size: 14px;
 }
-#settings-box, #auto-interact-settings-box label {
+#settings-box label {
     font-size: 14px; cursor: pointer; display: flex; align-items: center; gap: 8px;
 }
-#settings-box, #auto-interact-settings-box button {
+#settings-box button {
     display: block; width: 100%; padding: 8px; border: 1px solid var(--border);
     border-radius: 4px; background: var(--bg); color: var(--text);
     font-size: 13px; cursor: pointer; margin-top: 4px;
 }
-#settings-box, #auto-interact-settings-box button:hover { border-color: var(--accent); }
-#btn-settings-close, #btn-auto-interact-settings-close {
+#settings-box button:hover { border-color: var(--accent); }
+#btn-settings-close {
     margin-top: 12px !important; background: var(--accent) !important;
     border: none !important; color: white !important;
 }
-#settings-status, #auto-interact-settings-status, #wifi-status { font-size: 13px; margin-bottom: 8px; min-height: 16px; }
+#settings-status, #wifi-status { font-size: 13px; margin-bottom: 8px; min-height: 16px; }
 #wifi-status { color: var(--success); }
-#settings-status #auto-interact-settings-status { color: var(--accent); text-align: center; }
+#settings-status { color: var(--accent); text-align: center; }
 .xterm{cursor:text;position:relative;user-select:none;-ms-user-select:none;-webkit-user-select:none}.xterm.focus,.xterm:focus{outline:0}.xterm .xterm-helpers{position:absolute;top:0;z-index:5}.xterm .xterm-helper-textarea{padding:0;border:0;margin:0;position:absolute;opacity:0;left:-9999em;top:0;width:0;height:0;z-index:-5;white-space:nowrap;overflow:hidden;resize:none}.xterm .composition-view{background:#000;color:#fff;display:none;position:absolute;white-space:nowrap;z-index:1}.xterm .composition-view.active{display:block}.xterm .xterm-viewport{background-color:#000;overflow-y:scroll;cursor:default;position:absolute;right:0;left:0;top:0;bottom:0}.xterm .xterm-screen{position:relative}.xterm .xterm-screen canvas{position:absolute;left:0;top:0}.xterm-char-measure-element{display:inline-block;visibility:hidden;position:absolute;top:0;left:-9999em;line-height:normal}.xterm.enable-mouse-events{cursor:default}.xterm .xterm-cursor-pointer,.xterm.xterm-cursor-pointer{cursor:pointer}.xterm.column-select.focus{cursor:crosshair}.xterm .xterm-accessibility:not(.debug),.xterm .xterm-message{position:absolute;left:0;top:0;bottom:0;right:0;z-index:10;color:transparent;pointer-events:none}.xterm .xterm-accessibility-tree:not(.debug) ::selection{color:transparent}.xterm .xterm-accessibility-tree{font-family:monospace;user-select:text;white-space:pre}.xterm .xterm-accessibility-tree>div{transform-origin:left;width:fit-content}.xterm .live-region{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}.xterm-dim{opacity:1!important}.xterm-underline-1{text-decoration:underline}.xterm-underline-2{text-decoration:double underline}.xterm-underline-3{text-decoration:wavy underline}.xterm-underline-4{text-decoration:dotted underline}.xterm-underline-5{text-decoration:dashed underline}.xterm-overline{text-decoration:overline}.xterm-overline.xterm-underline-1{text-decoration:overline underline}.xterm-overline.xterm-underline-2{text-decoration:overline double underline}.xterm-overline.xterm-underline-3{text-decoration:overline wavy underline}.xterm-overline.xterm-underline-4{text-decoration:overline dotted underline}.xterm-overline.xterm-underline-5{text-decoration:overline dashed underline}.xterm-strikethrough{text-decoration:line-through}.xterm-screen .xterm-decoration-container .xterm-decoration{z-index:6;position:absolute}.xterm-screen .xterm-decoration-container .xterm-decoration.xterm-decoration-top-layer{z-index:7}.xterm-decoration-overview-ruler{z-index:8;position:absolute;top:0;right:0;pointer-events:none}.xterm-decoration-top{z-index:2;position:relative}.xterm .xterm-scrollable-element>.scrollbar{cursor:default}.xterm .xterm-scrollable-element>.scrollbar>.scra{cursor:pointer;font-size:11px!important}.xterm .xterm-scrollable-element>.visible{opacity:1;background:rgba(0,0,0,0);transition:opacity .1s linear;z-index:11}.xterm .xterm-scrollable-element>.invisible{opacity:0;pointer-events:none}.xterm .xterm-scrollable-element>.invisible.fade{transition:opacity .8s linear}.xterm .xterm-scrollable-element>.shadow{position:absolute;display:none}.xterm .xterm-scrollable-element>.shadow.top{display:block;top:0;left:3px;height:3px;width:100%;box-shadow:var(--vscode-scrollbar-shadow,#000) 0 6px 6px -6px inset}.xterm .xterm-scrollable-element>.shadow.left{display:block;top:3px;left:0;height:100%;width:3px;box-shadow:var(--vscode-scrollbar-shadow,#000) 6px 0 6px -6px inset}.xterm .xterm-scrollable-element>.shadow.top-left-corner{display:block;top:0;left:0;height:3px;width:3px}.xterm .xterm-scrollable-element>.shadow.top.left{box-shadow:var(--vscode-scrollbar-shadow,#000) 6px 0 6px -6px inset}
 #setup-lock {
     display: flex; align-items: center; gap: 10px; padding: 8px 12px;
@@ -153,7 +153,6 @@ body {
         <button id="btn-save-log">Save Log</button>
         <button id="btn-esp-reboot" class="danger">Reboot ESP</button>
         <button id="btn-settings">Settings</button>
-        <button id="btn-auto-interact-settings">Auto Interact Settings</button>
         <button id="btn-logout">Logout</button>
     </div>
 
@@ -261,22 +260,14 @@ body {
                 <button id="btn-tls-upload">Upload Certificate</button>
                 <div id="tls-status" style="font-size:13px;margin-top:8px;min-height:16px"></div>
             </fieldset>
+             <fieldset>
+                <legend>Auto Interact Lock</legend>
+                <label><input type="checkbox" id="auto-interact-lock">Lock</label>
+                <button id="btn-auto-interact-lock-save">Change lock</button>
+            </fieldset>
             <button id="btn-settings-close">Close</button>
         </div>
     </div>
-
-    <div id="auto-interact-settings-overlay" class="hidden">
-        <div id="auto-interact-settings-box">
-            <h2>Auto Interact Settings</h2>
-            <div id="auto-interact-settings-status"></div>         
-            <fieldset>
-                <legend>Lock Status</legend>
-                <label><input type="checkbox" id="auto-interact-lock-status"> Lock Status </label>
-            </fieldset>            
-            <button id="btn-auto-interact-settings-close">Close</button>
-        </div>
-    </div>
-
 
     <div id="terminal-container"></div>
 
@@ -307,8 +298,6 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
     var loginError = document.getElementById("login-error");
     var settingsOverlay = document.getElementById("settings-overlay");
     var settingsStatus = document.getElementById("settings-status");
-    var autoInteractSettingsOverlay = document.getElementById("auto-interact-settings-overlay");
-    var autoInteractSettingsStatus = document.getElementById("auto-interact-settings-status");
     var wifiStatus = document.getElementById("wifi-status");
     var terminalContainer = document.getElementById("terminal-container");
     var btnPower = document.getElementById("btn-power");
@@ -756,26 +745,30 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
             document.getElementById("ap-ssid").value = conf.ap_ssid || "";
             document.getElementById("ap-pass").value = "";
         });
+
+        //auto-interact
+        api("GET", "/api/auto_interact_config", null, function(err, conf) {
+            if (err || !conf) return;           
+            document.getElementById("auto-interact-lock").checked = conf.lock;           
+        });
     });
 
     document.getElementById("btn-settings-close").addEventListener("click", function() {
         settingsOverlay.classList.add("hidden");
     });
 
-    //auto-interact-settings
-    document.getElementById("btn-auto-interact-settings").addEventListener("click", function() {
-        autoInteractSettingsOverlay.classList.remove("hidden");
-        autoInteractSettingsStatus.textContent = "";  
-        api("GET", "/api/auto_interact_config", null, function(err, conf) {
-            if (err || !conf) return;           
-            document.getElementById("auto-interact-lock-status").checked = conf.lock;           
+    document.getElementById("btn-auto-interact-lock-save").addEventListener("click", function() {
+        var locked = document.getElementById("auto-interact-lock").checked;
+        apiRequest("POST", "/api/auto_interact_config", {lock: locked}, function(err, res) {
+            if (!err && res && res.ok) {
+                showSettingsMsg("Lock status saved");
+            }
+            else {
+                showSettingsMsg((res && res.error) || "Failed", true);
+            }
         });
     });
-
-    document.getElementById("btn-auto-interact-settings-close").addEventListener("click", function() {
-        autoInteractSettingsOverlay.classList.add("hidden");
-    });
-
+ 
     document.getElementById("btn-ntp-save").addEventListener("click", function() {
         var server = document.getElementById("ntp-server").value.trim();
         api("POST", "/api/config", {ntp_server: server}, function(err, res) {
