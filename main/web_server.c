@@ -31,9 +31,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
-
-//#include "auto_interact.h"
-//auto_interact_web_input_hook();
+#include "auto_interact.h"
 
 // NTP status from main.c
 extern const char *ntp_get_server(void);
@@ -558,6 +556,37 @@ static esp_err_t handle_404(httpd_req_t *req, httpd_err_code_t err)
 }
 
 // --- API handlers ---
+static esp_err_t handle_auto_interact_config_get(httpd_req_t *req) 
+{
+    if (!require_auth(req)) return ESP_OK;
+    bool lockValue = auto_interact_config_get()
+    char resp[13];
+    snprintf(resp, sizeof(resp), "{\"lock\":%d}", lockValue);
+    return httpd_resp_send(req, resp, strlen(resp));
+}
+
+static esp_err_t handle_auto_interact_config_post(httpd_req_t *req)
+{ 
+    if (!require_auth(req)) return ESP_OK;
+
+    char buf[512];
+    int len = read_body(req, buf, sizeof(buf));
+    if (len == 0) return send_json_error(req, 400, "Empty request body");
+    if (len < 0) return send_json_error(req, 400, "Invalid request size");
+
+    cJSON *json = cJSON_Parse(buf);
+    if (!json) return send_json_error(req, 400, "Invalid JSON");
+
+    const cJSON *lock = cJSON_GetObjectItem(json, "lock");
+    if (!cJSON_IsBool(lock)) {
+        cJSON_Delete(json);
+        return send_json_error(req, 400, "Missing lock value");
+    }
+    bool lockValue = cJSON_IsTrue(lock)
+    auto_interact_config_set(lockValue)
+    cJSON_Delete(json);
+    return httpd_resp_send(req, "{\"ok\":true}", 11);
+}
 
 static esp_err_t handle_login(httpd_req_t *req)
 {
@@ -1408,6 +1437,9 @@ esp_err_t web_server_start(void)
     const httpd_uri_t route_ota_github = { .uri = "/api/ota/github", .method = HTTP_POST, .handler = handle_ota_github };
     const httpd_uri_t route_tls = { .uri = "/api/tls", .method = HTTP_POST, .handler = handle_tls_upload };
     const httpd_uri_t route_reboot = { .uri = "/api/reboot", .method = HTTP_POST, .handler = handle_esp_reboot };
+
+    const httpd_uri_t route_auto_interact_config_get = { .uri = "/api/auto_interact_config", .method = HTTP_GET, .handler = handle_auto_interact_config_get };
+    const httpd_uri_t route_auto_interact_config_post = { .uri = "/api/auto_interactconfig", .method = HTTP_POST, .handler = handle_auto_interact_config_post };
 
     /* WebSocket */
     const httpd_uri_t route_ws = { .uri = "/ws", .method = HTTP_GET, .handler = handle_ws, .is_websocket = true };

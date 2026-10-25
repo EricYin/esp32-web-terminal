@@ -172,7 +172,7 @@ body {
 }
 
 /* Settings panel */
-#settings-overlay {
+#settings-overlay, #auto-interact-settings-overlay {
     position: fixed;
     inset: 0;
     background: rgba(0,0,0,0.7);
@@ -182,11 +182,11 @@ body {
     z-index: 999;
 }
 
-#settings-overlay.hidden {
+#settings-overlay.hidden, #auto-interact-settings-overlay.hidden {
     display: none;
 }
 
-#settings-box {
+#settings-box, #auto-interact-settings-box {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -197,27 +197,27 @@ body {
     overflow-y: auto;
 }
 
-#settings-box h2 {
+#settings-box, #auto-interact-settings-box h2 {
     margin-bottom: 16px;
     font-size: 18px;
     text-align: center;
 }
 
-#settings-box fieldset {
+#settings-box, #auto-interact-settings-box fieldset {
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 12px;
     margin-bottom: 12px;
 }
 
-#settings-box legend {
+#settings-box, #auto-interact-settings-box legend {
     font-size: 13px;
     color: var(--accent);
     padding: 0 6px;
 }
 
-#settings-box input[type="text"],
-#settings-box input[type="password"] {
+#settings-box, #auto-interact-settings-box input[type="text"],
+#settings-box, #auto-interact-settings-box input[type="password"] {
     display: block;
     width: 100%;
     padding: 8px 12px;
@@ -229,7 +229,7 @@ body {
     font-size: 14px;
 }
 
-#settings-box label {
+#settings-box, #auto-interact-settings-box label {
     font-size: 14px;
     cursor: pointer;
     display: flex;
@@ -237,7 +237,7 @@ body {
     gap: 8px;
 }
 
-#settings-box button {
+#settings-box, #auto-interact-settings-box button {
     display: block;
     width: 100%;
     padding: 8px;
@@ -250,25 +250,25 @@ body {
     margin-top: 4px;
 }
 
-#settings-box button:hover {
+#settings-box, #auto-interact-settings-box button:hover {
     border-color: var(--accent);
 }
 
-#btn-settings-close {
+#btn-settings-close, #btn-auto-interact-settings-close {
     margin-top: 12px !important;
     background: var(--accent) !important;
     border: none !important;
     color: white !important;
 }
 
-#settings-status, #wifi-status {
+#settings-status, #auto-interact-settings-status, #wifi-status {
     font-size: 13px;
     margin-bottom: 8px;
     min-height: 16px;
 }
 
 #wifi-status { color: var(--success); }
-#settings-status { color: var(--accent); text-align: center; }
+#settings-status, #auto-interact-settings-status { color: var(--accent); text-align: center; }
 
 /* Responsive */
 @media (max-width: 600px) {

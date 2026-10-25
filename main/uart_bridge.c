@@ -26,10 +26,9 @@ static void uart_rx_task(void *arg)
         int len = uart_read_bytes(UART_BRIDGE_PORT, buf, sizeof(buf), pdMS_TO_TICKS(50));
         if (len > 0) {
             serial_port_rx_notify(port_index, buf, len);
-
-            for (int i = 0; i < len; i++) {
-                auto_interact_feed_char((char)data[i]);
-            }  
+            
+            //notify auto_interact output data
+            auto_interact_notify_output(data);           
         }
     }
 }

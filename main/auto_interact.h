@@ -12,9 +12,9 @@ void auto_interact_init(void);
 void auto_interact_notify_output(const uint8_t *data, size_t len);
 
 // 提供给 Web 页面/外部 API 调用的清除错误锁定状态的函数
-void auto_interact_clear_lockout(void);
+void auto_interact_config_set(bool lock);
 
 // 获取当前锁定状态（用于前端页面/API 展示）
-bool auto_interact_is_locked_out(void);
+bool auto_interact_config_get(void);
 
 #endif // AUTO_INTERACT_H

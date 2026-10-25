@@ -127,5 +127,6 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "AP mode available at: https://%s/", wifi.ap_ip);
 
+    //init auto_interact
     auto_interact_init(); 
 }
