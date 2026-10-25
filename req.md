@@ -5,5 +5,6 @@
 4. 如果uboot下触发的命令失败卡住了可以停留在uboot，这时需要人工干预。
 5. 提供方法清空状态比如大于等于3次错误，比如页面可以提供按钮调用，这样task又可以满足检测条件。
 6. 并发情况:理论上uboot模式下只有自动输入和其输出。所以即使假如有其他并发输入输出，只要保证程序不崩溃就行，uboot自动命令出错可以接受。
+7. web ui部分:在现有settings页面增加lock checkbox来通过web_server中新增的对应的webapi来get/post autoInteract.c里面的g_is_locked_out等值 （人工干预）
 
 

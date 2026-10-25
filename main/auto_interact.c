@@ -26,8 +26,9 @@ typedef struct {
 
 // 配置您目前的 U-Boot 自动化需求
 static const char* exec_cmds[] = {
-    "printenv\n",
-    "version\n"
+    "setenv serverip 192.168.1.100\n",
+    "tftpboot 0x81000000 op.bin\n",
+    "bootm 0x81000000\n"
 };
 
 static const int PORT_INDEX = 0;
