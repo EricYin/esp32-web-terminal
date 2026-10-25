@@ -559,7 +559,7 @@ static esp_err_t handle_404(httpd_req_t *req, httpd_err_code_t err)
 static esp_err_t handle_auto_interact_config_get(httpd_req_t *req) 
 {
     if (!require_auth(req)) return ESP_OK;
-    bool lockValue = auto_interact_config_get()
+    bool lockValue = auto_interact_config_get();
     char resp[13];
     snprintf(resp, sizeof(resp), "{\"lock\":%d}", lockValue);
     return httpd_resp_send(req, resp, strlen(resp));
@@ -582,8 +582,8 @@ static esp_err_t handle_auto_interact_config_post(httpd_req_t *req)
         cJSON_Delete(json);
         return send_json_error(req, 400, "Missing lock value");
     }
-    bool lockValue = cJSON_IsTrue(lock)
-    auto_interact_config_set(lockValue)
+    bool lockValue = cJSON_IsTrue(lock);
+    auto_interact_config_set(lockValue);
     cJSON_Delete(json);
     return httpd_resp_send(req, "{\"ok\":true}", 11);
 }

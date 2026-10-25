@@ -6,9 +6,12 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "uart_bridge.h"
+#include "serial_port.h"
 
 // 外部串口发送依赖（适配项目的实际发送函数）
-extern int serial_port_write(const uint8_t *data, size_t len); 
+esp_err_t serial_port_send(int port_index, const uint8_t *data, size_t len);
+//extern esp_err_t uart_bridge_send(int port_index, const uint8_t *data, size_t len);
 
 #define TAG "AUTO_INTERACT"
 
@@ -31,9 +34,9 @@ static const char* exec_cmds[] = {
     "version\n"
 };
 
-static const int64_t CHECK_INTERVAL = 10000  //10 sec
-static const int64_t CHECK_INTERVAL_TICK = (1000LL * CHECK_INTERVAL)
-static const int64_t ALLOWED_TWO_AUTO_CMD_INTERVAL = (120LL * 1000 * 1000) //2 min
+static const int64_t CHECK_INTERVAL = 10000;  //10 sec
+static const int64_t CHECK_INTERVAL_TICK = (1000LL * CHECK_INTERVAL);
+static const int64_t ALLOWED_TWO_AUTO_CMD_INTERVAL = (120LL * 1000 * 1000); //2 min
 static const char *error_keywords[] = {"err", "error", "fail", "exception", "not found"};
 static const size_t error_keywords_count = sizeof(error_keywords) / sizeof(error_keywords[0]);
     
@@ -58,6 +61,13 @@ static int64_t g_last_exec_us = 0;     // 上次执行命令集的时间戳
 static uint32_t g_lockout_counter = 0; // 连续高频触发计数器
 static bool g_is_locked_out = true;   // 熔断锁定标志位
 
+
+// 新增：发送命令前强行复位缓冲区，防止读到上一次交互残留下来的旧提示符
+void auto_interact_reset_buffer(void) {
+    g_rb.head = 0;
+    memset(g_rb.storage, 0, BUFFER_SIZE);
+}
+
 // 1. 同步快速通知函数：无锁、无移动、极快
 void auto_interact_notify_output(const uint8_t *data, size_t len) {
     if (!data || len == 0) return;
@@ -74,10 +84,10 @@ void auto_interact_notify_output(const uint8_t *data, size_t len) {
     g_last_update_us = esp_timer_get_time();
 }
 
-// 清空锁定状态（人工干预）
+// 设置或者清空锁定状态（人工干预）
 void auto_interact_config_set(bool lock) {
     if (lock) {
-        g_is_locked_out = true
+        g_is_locked_out = true;
         ESP_LOGI(TAG, "Lockout status is set manually.");
     } else {
         g_lockout_counter = 0;
@@ -117,6 +127,17 @@ static const char* strcasestr_custom(const char *haystack, const char *needle) {
     }
     return NULL;
 }
+
+// 从环形缓冲区反向读取最后 N 个字符拼成线性字符串
+static void rb_read_tail(char *dest, size_t n) {
+    uint32_t current_head = g_rb.head;
+    for (size_t i = 0; i < n; i++) {
+        uint32_t idx = current_head - n + i;
+        dest[i] = (char)g_rb.storage[idx & BUFFER_MASK];
+    }
+    dest[n] = '\0';
+}
+
 
 // 【核心重构】等待 U-Boot 响应函数
 // 结束条件：看到控制台提示符比如 uboot 提示符为结尾；结束后检查缓冲区是否含有错误字串。
@@ -193,16 +214,6 @@ static bool wait_for_response(const char* expected_prompt, uint32_t wait_timeout
     }
 }
 
-// 从环形缓冲区反向读取最后 N 个字符拼成线性字符串
-static void rb_read_tail(char *dest, size_t n) {
-    uint32_t current_head = g_rb.head;
-    for (size_t i = 0; i < n; i++) {
-        uint32_t idx = current_head - n + i;
-        dest[i] = (char)g_rb.storage[idx & BUFFER_MASK];
-    }
-    dest[n] = '\0';
-}
-
 // 2. 核心检测与执行状态机 Task
 static void auto_interact_task(void *pvParameters) {
     ESP_LOGI(TAG, "auto_interact_task started.");
@@ -229,20 +240,20 @@ static void auto_interact_task(void *pvParameters) {
         }
         
         int64_t now = esp_timer_get_time();
-        bool withinSlient = (now - g_last_update_us) <= CHECK_INTERVAL_TICK
+        bool withinSlient = (now - g_last_update_us) <= CHECK_INTERVAL_TICK;
         
         // 条件一：静默期检查（大于 10 秒钟没有收到任何新输入，说明疯狂输出已停止，处于稳定提示符状态）
         if (withinSlient) {
-            continue
+            continue;
         }    
 
         // 条件二：检查尾部字符是否精确匹配当前设定的提示符
         rb_read_tail(prompt_check_buf, prompt_len);        
 
         ESP_LOGI(TAG, "DEBUG for rb_read_tail output: '%s'", prompt_check_buf);
-        bool not_expected_prompt = strcmp(prompt_check_buf, g_profile.target_prompt) != 0
+        bool not_expected_prompt = strcmp(prompt_check_buf, g_profile.target_prompt) != 0;
         if (not_expected_prompt) {
-            continue
+            continue;
         }
 
         ESP_LOGI(TAG, "Matched target prompt '%s'. Checking anti-damage counters...", g_profile.target_prompt);
@@ -263,9 +274,9 @@ static void auto_interact_task(void *pvParameters) {
         g_last_exec_us = now; // 记录本次交互尝试的时间戳
         
         // 条件三：发送二次验证命令（例如 version）
-        auto_interact_reset_buffer()
+        auto_interact_reset_buffer();
         ESP_LOGI(TAG, "Sending validation command...");
-        serial_port_write((const uint8_t*)g_profile.validate_cmd, strlen(g_profile.validate_cmd));       
+        serial_port_send(UART_BRIDGE_TX_PIN, (const uint8_t*)g_profile.validate_cmd, strlen(g_profile.validate_cmd));       
        
         // 检查二次验证是否通过
         if (wait_for_response(g_profile.validate_response, 150, 3000, false)) {
@@ -274,9 +285,9 @@ static void auto_interact_task(void *pvParameters) {
             bool seq_success = true;
             // 顺序输入交互命令集合
             for (size_t i = 0; i < g_profile.cmd_count; i++) {
-                auto_interact_reset_buffer()
+                auto_interact_reset_buffer();
                 ESP_LOGI(TAG, "Sending sequence [%d/%d]: %s", i + 1, g_profile.cmd_count, g_profile.exec_cmds[i]);
-                serial_port_write((const uint8_t*)g_profile.exec_cmds[i], strlen(g_profile.exec_cmds[i]));                
+                serial_port_send(UART_BRIDGE_TX_PIN, (const uint8_t*)g_profile.exec_cmds[i], strlen(g_profile.exec_cmds[i]));                
                 
                 // 【改动点】动态判定当前循环处理的是否为最后一条命令
                 bool is_last = (i == (g_profile.cmd_count - 1));
@@ -302,12 +313,6 @@ static void auto_interact_task(void *pvParameters) {
       
     }
     free(prompt_check_buf);
-}
-
-// 新增：发送命令前强行复位缓冲区，防止读到上一次交互残留下来的旧提示符
-void auto_interact_reset_buffer(void) {
-    g_rb.head = 0;
-    memset(g_rb.storage, 0, BUFFER_SIZE);
 }
 
 void auto_interact_init(void) {
