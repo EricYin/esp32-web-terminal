@@ -295,6 +295,9 @@ body {
                         <button id="btn-auto-interact-add" type="button" title="Add command" aria-label="Add command">+</button>
                         <label for="auto-interact-keywords">Error keywords</label>
                         <textarea id="auto-interact-keywords" rows="4" spellcheck="false"></textarea>
+                        <label for="auto-interact-line-ending">Command line ending</label>
+                        <input type="text" id="auto-interact-line-ending" value="\n" autocomplete="off" spellcheck="false" placeholder="Empty = append nothing">
+                        <div style="font-size:12px;margin-bottom:8px">Appended literally to the validation command and all execution commands. No escape conversion: \n means backslash + n.</div>                       
                         <button id="btn-auto-interact-save" type="submit" disabled>Save Auto Interact</button>
                     </div>
                 </form>
@@ -885,6 +888,7 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
             document.getElementById("auto-interact-lock").checked = conf.locked_out;
             document.getElementById("auto-interact-interval").value = conf.check_interval_s;
             document.getElementById("auto-interact-prompt").value = conf.cmd.target_prompt;
+            document.getElementById("auto-interact-line-ending").value = "\\n";
             document.getElementById("auto-interact-validate").value = conf.cmd.validate_cmd;
             document.getElementById("auto-interact-response").value = conf.cmd.validate_cmd_resp;
             document.getElementById("auto-interact-keywords").value = conf.cmd.error_keywords.join("\n");
@@ -912,7 +916,7 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
     }
 
     function autoCommand(value, maximum, name) {
-        if (value && !/[\r\n]$/.test(value)) value += "\n";
+        if (value) value += document.getElementById("auto-interact-line-ending").value;       
         return autoString(value, maximum, name);
     }
 
