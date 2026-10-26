@@ -556,36 +556,193 @@ static esp_err_t handle_404(httpd_req_t *req, httpd_err_code_t err)
 }
 
 // --- API handlers ---
-static esp_err_t handle_auto_interact_config_get(httpd_req_t *req) 
+static bool auto_interact_json_uint(const cJSON *item, uint32_t minimum, uint32_t *value)
 {
-    if (!require_auth(req)) return ESP_OK;
-    bool lockValue = auto_interact_config_get();
-    char resp[13];
-    snprintf(resp, sizeof(resp), "{\"lock\":%d}", lockValue);
-    return httpd_resp_send(req, resp, strlen(resp));
+    if (!cJSON_IsNumber(item) || !(item->valuedouble >= minimum &&
+        item->valuedouble <= UINT32_MAX)) return false;
+    uint32_t number = (uint32_t)item->valuedouble;
+    if (item->valuedouble != (double)number) return false;
+    *value = number;
+    return true;
+}
+
+static bool auto_interact_json_string(const cJSON *item, char *value, size_t capacity)
+{
+    if (!cJSON_IsString(item) || !item->valuestring) return false;
+    size_t length = strlen(item->valuestring);
+    if (length == 0 || length >= capacity) return false;
+    memcpy(value, item->valuestring, length + 1);
+    return true;
+}
+
+static bool auto_interact_json_cmd(const cJSON *json, auto_interact_cmd_t *cmd)
+{
+    if (!auto_interact_json_string(cJSON_GetObjectItemCaseSensitive(json, "target_prompt"),
+            cmd->target_prompt, sizeof(cmd->target_prompt)) ||
+        !auto_interact_json_string(cJSON_GetObjectItemCaseSensitive(json, "validate_cmd"),
+            cmd->validate_cmd, sizeof(cmd->validate_cmd)) ||
+        !auto_interact_json_string(cJSON_GetObjectItemCaseSensitive(json, "validate_cmd_resp"),
+            cmd->validate_cmd_resp, sizeof(cmd->validate_cmd_resp))) return false;
+
+    const cJSON *commands = cJSON_GetObjectItemCaseSensitive(json, "exec_cmds");
+    const cJSON *timeouts = cJSON_GetObjectItemCaseSensitive(json, "exec_cmds_timeout_s");
+    const cJSON *keywords = cJSON_GetObjectItemCaseSensitive(json, "error_keywords");
+    if (!cJSON_IsArray(commands) || !cJSON_IsArray(timeouts) || !cJSON_IsArray(keywords)) return false;
+
+    int count = cJSON_GetArraySize(commands);
+    int keyword_count = cJSON_GetArraySize(keywords);
+    if (count < 1 || count > CONFIG_AUTO_INTERACT_EXEC_CMD_COUNT_MAX_LEN ||
+        cJSON_GetArraySize(timeouts) != count ||
+        keyword_count > CONFIG_AUTO_INTERACT_ERROR_KEYWORD_COUNT_MAX_LEN) return false;
+
+    const cJSON *declared_count = cJSON_GetObjectItemCaseSensitive(json, "cmd_count");
+    const cJSON *declared_keywords = cJSON_GetObjectItemCaseSensitive(json, "error_keywords_count");
+    uint32_t declared;
+    if (declared_count && (!auto_interact_json_uint(declared_count, 0, &declared) ||
+        declared != (uint32_t)count)) return false;
+    if (declared_keywords && (!auto_interact_json_uint(declared_keywords, 0, &declared) ||
+        declared != (uint32_t)keyword_count)) return false;
+
+    for (int index = 0; index < count; index++) {
+        if (!auto_interact_json_string(cJSON_GetArrayItem(commands, index),
+                cmd->exec_cmds[index], sizeof(cmd->exec_cmds[index])) ||
+            !auto_interact_json_uint(cJSON_GetArrayItem(timeouts, index), 1,
+                &cmd->exec_cmds_timeout_s[index]) ||
+            cmd->exec_cmds_timeout_s[index] > UINT32_MAX / 1000U) return false;
+    }
+    for (int index = 0; index < keyword_count; index++) {
+        if (!auto_interact_json_string(cJSON_GetArrayItem(keywords, index),
+                cmd->error_keywords[index], sizeof(cmd->error_keywords[index]))) return false;
+    }
+    cmd->cmd_count = (size_t)count;
+    cmd->error_keywords_count = (size_t)keyword_count;
+    return true;
 }
 
 static esp_err_t handle_auto_interact_config_post(httpd_req_t *req)
-{ 
+{
     if (!require_auth(req)) return ESP_OK;
+    if (!require_password_changed(req)) return ESP_OK;
 
-    char buf[512];
-    int len = read_body(req, buf, sizeof(buf));
+    if (req->content_len > 8192) return send_json_error(req, 400, "Invalid request size");
+    char *buf = malloc(req->content_len + 1);
+    if (!buf) return send_json_error(req, 500, "Out of memory");
+    int len = read_body(req, buf, req->content_len + 1);
+    cJSON *json = len > 0 ? cJSON_Parse(buf) : NULL;
+    free(buf);
     if (len == 0) return send_json_error(req, 400, "Empty request body");
     if (len < 0) return send_json_error(req, 400, "Invalid request size");
-
-    cJSON *json = cJSON_Parse(buf);
     if (!json) return send_json_error(req, 400, "Invalid JSON");
 
-    const cJSON *lock = cJSON_GetObjectItem(json, "lock");
-    if (!cJSON_IsBool(lock)) {
-        cJSON_Delete(json);
-        return send_json_error(req, 400, "Missing lock value");
+    auto_interact_config_t config = auto_interact_config_get();
+    const char *error = "Invalid configuration";
+    if (!cJSON_IsObject(json)) goto invalid;
+
+    const cJSON *lock = cJSON_GetObjectItemCaseSensitive(json, "locked_out");
+    if (!lock) lock = cJSON_GetObjectItemCaseSensitive(json, "lock");
+    if (lock) {
+        error = "locked_out must be a boolean";
+        if (!cJSON_IsBool(lock)) goto invalid;
+        config.locked_out = cJSON_IsTrue(lock);
     }
-    bool lockValue = cJSON_IsTrue(lock);
-    auto_interact_config_set(lockValue);
+
+    const cJSON *interval = cJSON_GetObjectItemCaseSensitive(json, "check_interval_s");
+    if (interval) {
+        error = "Invalid check_interval_s";
+        if (!auto_interact_json_uint(interval, 1, &config.check_interval_s) ||
+            config.check_interval_s > UINT32_MAX / 1000U) goto invalid;
+    }
+
+    const cJSON *command = cJSON_GetObjectItemCaseSensitive(json, "cmd");
+    if (command && !cJSON_IsNull(command)) {
+        error = "cmd must be an object or null";
+        if (!cJSON_IsObject(command)) goto invalid;
+        if (command->child) {
+            auto_interact_cmd_t updated = {0};
+            error = "Invalid cmd configuration";
+            if (!auto_interact_json_cmd(command, &updated)) goto invalid;
+            config.cmd = updated;
+        }
+    }
+
+    esp_err_t save_result = auto_interact_config_set(config, lock != NULL);
     cJSON_Delete(json);
+    if (save_result != ESP_OK) return send_json_error(req, 500,
+        save_result == ESP_ERR_INVALID_STATE ? "Auto interaction or configuration storage unavailable" : "Failed to save configuration");
+    httpd_resp_set_type(req, "application/json");
+    set_cors_headers(req);
     return httpd_resp_send(req, "{\"ok\":true}", 11);
+
+invalid:
+    cJSON_Delete(json);
+    return send_json_error(req, 400, error);
+}
+
+static esp_err_t handle_auto_interact_config_get(httpd_req_t *req)
+{
+    if (!require_auth(req)) return ESP_OK;
+
+    auto_interact_config_t config = auto_interact_config_get();
+    const auto_interact_cmd_t *cmd = &config.cmd;
+
+    if (cmd->cmd_count > CONFIG_AUTO_INTERACT_EXEC_CMD_COUNT_MAX_LEN ||
+        cmd->error_keywords_count > CONFIG_AUTO_INTERACT_ERROR_KEYWORD_COUNT_MAX_LEN) {
+        return send_json_error(req, 500, "Invalid configuration");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return send_json_error(req, 500, "Out of memory");
+
+    if (!cJSON_AddBoolToObject(root, "locked_out", config.locked_out) ||
+        !cJSON_AddNumberToObject(root, "check_interval_s", config.check_interval_s)) {
+        goto fail;
+    }
+
+    cJSON *command = cJSON_AddObjectToObject(root, "cmd");
+    if (!command) goto fail;
+
+    if (!cJSON_AddStringToObject(command, "target_prompt", cmd->target_prompt) ||
+        !cJSON_AddStringToObject(command, "validate_cmd", cmd->validate_cmd) ||
+        !cJSON_AddStringToObject(command, "validate_cmd_resp", cmd->validate_cmd_resp) ||
+        !cJSON_AddNumberToObject(command, "cmd_count", cmd->cmd_count) ||
+        !cJSON_AddNumberToObject(command, "error_keywords_count", cmd->error_keywords_count)) {
+        goto fail;
+    }
+
+    cJSON *commands = cJSON_AddArrayToObject(command, "exec_cmds");
+    cJSON *timeouts = cJSON_AddArrayToObject(command, "exec_cmds_timeout_s");
+    cJSON *keywords = cJSON_AddArrayToObject(command, "error_keywords");
+    if (!commands || !timeouts || !keywords) goto fail;
+
+    for (size_t index = 0; index < cmd->cmd_count; index++) {
+        cJSON *text = cJSON_CreateString(cmd->exec_cmds[index]);
+        if (!text) goto fail;
+        cJSON_AddItemToArray(commands, text);
+
+        cJSON *timeout = cJSON_CreateNumber(cmd->exec_cmds_timeout_s[index]);
+        if (!timeout) goto fail;
+        cJSON_AddItemToArray(timeouts, timeout);
+    }
+
+    for (size_t index = 0; index < cmd->error_keywords_count; index++) {
+        cJSON *keyword = cJSON_CreateString(cmd->error_keywords[index]);
+        if (!keyword) goto fail;
+        cJSON_AddItemToArray(keywords, keyword);
+    }
+
+    char *body = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!body) return send_json_error(req, 500, "Out of memory");
+
+    httpd_resp_set_type(req, "application/json");
+    set_cors_headers(req);
+    esp_err_t result = httpd_resp_send(req, body, strlen(body));
+    cJSON_free(body);
+    return result;
+
+fail:
+    cJSON_Delete(root);
+    return send_json_error(req, 500, "Out of memory");
 }
 
 static esp_err_t handle_login(httpd_req_t *req)
