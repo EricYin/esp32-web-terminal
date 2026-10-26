@@ -105,6 +105,13 @@ void app_main(void)
     serial_port_set_rx_callback(serial_to_ws_callback, NULL);
     ESP_ERROR_CHECK(serial_port_init_all());
 
+    //init auto_interact
+    esp_err_t auto_interact_result = auto_interact_init();
+    if (auto_interact_result != ESP_OK) {
+        ESP_LOGW(TAG, "Auto interaction unavailable (%s); continuing with existing services",
+                 esp_err_to_name(auto_interact_result));
+    }
+
     // 7. Start HTTPS + WebSocket server
     ESP_ERROR_CHECK(web_server_init());
     ESP_ERROR_CHECK(web_server_start());
@@ -126,7 +133,4 @@ void app_main(void)
         ESP_LOGI(TAG, "Access terminal at: https://%s/", wifi.sta_ip);
     }
     ESP_LOGI(TAG, "AP mode available at: https://%s/", wifi.ap_ip);
-
-    //init auto_interact
-    auto_interact_init(); 
 }
