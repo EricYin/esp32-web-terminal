@@ -923,6 +923,7 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
     function autoCommand(value, maximum, name) {
         var endings = {none: "", lf: "\n", cr: "\r", crlf: "\r\n"};
         var ending = endings[document.getElementById("auto-interact-line-ending").value];       
+        if (ending) value = value.replace(/[\r\n]+$/, "");
         value += ending; 
         return autoString(value, maximum, name);
     }
