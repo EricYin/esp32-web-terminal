@@ -25,6 +25,32 @@
 #define CONFIG_TIMEZONE_MAX_LEN    40
 #define CONFIG_DEFAULT_TIMEZONE    "UTC0"
 
+#define CONFIG_AUTO_INTERACT_TARGET_PROMPT_MAX_LEN   20
+#define CONFIG_AUTO_INTERACT_VALIDATE_CMD_MAX_LEN    20
+#define CONFIG_AUTO_INTERACT_VALIDATE_CMD_RESP_MAX_LEN    40
+#define CONFIG_AUTO_INTERACT_EXEC_CMD_COUNT_MAX_LEN    10
+#define CONFIG_AUTO_INTERACT_EXEC_CMD_MAX_LEN    60
+#define CONFIG_AUTO_INTERACT_ERROR_KEYWORD_COUNT_MAX_LEN    10
+#define CONFIG_AUTO_INTERACT_ERROR_KEYWORD_MAX_LEN    20
+
+typedef struct {
+    char target_prompt[CONFIG_AUTO_INTERACT_TARGET_PROMPT_MAX_LEN];      
+    char validate_cmd[CONFIG_AUTO_INTERACT_VALIDATE_CMD_MAX_LEN];       
+    char validate_cmd_resp[CONFIG_AUTO_INTERACT_VALIDATE_CMD_RESP_MAX_LEN];  
+    char exec_cmds[CONFIG_AUTO_INTERACT_EXEC_CMD_COUNT_MAX_LEN][CONFIG_AUTO_INTERACT_EXEC_CMD_MAX_LEN];  
+    uint32_t exec_cmds_timeout_s[CONFIG_AUTO_INTERACT_EXEC_CMD_COUNT_MAX_LEN];
+    size_t cmd_count;
+    char error_keywords[CONFIG_AUTO_INTERACT_ERROR_KEYWORD_COUNT_MAX_LEN][CONFIG_AUTO_INTERACT_ERROR_KEYWORD_MAX_LEN];     
+    size_t error_keywords_count;
+} auto_interact_cmd_t;
+
+typedef struct {
+     bool locked_out;
+     uint32_t check_interval_s;
+     auto_interact_cmd_t cmd;
+} auto_interact_config_t;   
+
+
 typedef struct {
     char sta_ssid[CONFIG_WIFI_SSID_MAX_LEN + 1];
     char sta_pass[CONFIG_WIFI_PASS_MAX_LEN + 1];
