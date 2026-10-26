@@ -417,7 +417,7 @@ static void auto_interact_task(void *pvParameters) {
     while (1) {
         int64_t wait_start_us = esp_timer_get_time();
         do {
-            vTaskDelay(pdMS_TO_TICKS(1000));
+            vTaskDelay(pdMS_TO_TICKS(2000));
             conf = auto_interact_config_get();
         } while (esp_timer_get_time() - wait_start_us < (int64_t)conf.check_interval_s * 1000000LL);
 
