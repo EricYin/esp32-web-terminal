@@ -75,8 +75,9 @@ body {
 #settings-box h2 { margin-bottom: 16px; font-size: 18px; text-align: center; }
 #settings-box fieldset {
     border: 1px solid var(--border); border-radius: 4px;
-    padding: 12px; margin-bottom: 12px;
+    padding: 12px; margin-bottom: 12px; min-width: 0;
 }
+#settings-box input[type="file"] { max-width: 100%; }
 #settings-box legend { font-size: 13px; color: var(--accent); padding: 0 6px; }
 #settings-box input[type="text"], #settings-box input[type="password"] {
     display: block; width: 100%; padding: 8px 12px; margin-bottom: 8px;
@@ -92,6 +93,20 @@ body {
     font-size: 13px; cursor: pointer; margin-top: 4px;
 }
 #settings-box button:hover { border-color: var(--accent); }
+#settings-box input[type="number"], #settings-box textarea {
+    display: block; width: 100%; min-width: 0; padding: 8px; margin-bottom: 8px;
+    border: 1px solid var(--border); border-radius: 4px;
+    background: var(--bg); color: var(--text); font-size: 14px;
+}
+#settings-box textarea { resize: vertical; font-family: 'Cascadia Code', Consolas, monospace; }
+#settings-box button:disabled { opacity: 0.5; cursor: default; }
+#auto-interact-controls label { margin-bottom: 6px; }
+#auto-interact-controls .auto-lock { margin-bottom: 12px; }
+.auto-command { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; }
+.auto-command-actions { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+#settings-box .auto-command-actions button { flex: 0 0 32px; width: 32px; height: 32px; padding: 0; margin: 0; }
+.auto-command-actions span { flex: 1; min-width: 0; font-size: 13px; }
+#auto-interact-status { font-size: 13px; min-height: 18px; margin-bottom: 8px; overflow-wrap: anywhere; }
 #btn-settings-close {
     margin-top: 12px !important; background: var(--accent) !important;
     border: none !important; color: white !important;
@@ -260,10 +275,29 @@ body {
                 <button id="btn-tls-upload">Upload Certificate</button>
                 <div id="tls-status" style="font-size:13px;margin-top:8px;min-height:16px"></div>
             </fieldset>
-             <fieldset>
-                <legend>Auto Interact Lock</legend>
-                <label><input type="checkbox" id="auto-interact-lock">Lock</label>
-                <button id="btn-auto-interact-lock-save">Change lock</button>
+            <fieldset>
+                <legend>Auto Interact</legend>
+                <div id="auto-interact-status" role="status" aria-live="polite"></div>
+                <button id="btn-auto-interact-reload" type="button">Reload</button>
+                <form id="auto-interact-form">
+                    <div id="auto-interact-controls">
+                        <label class="auto-lock"><input type="checkbox" id="auto-interact-lock"> Locked</label>
+                        <button id="btn-auto-interact-lock-save" type="button" disabled>Save Lock</button>
+                        <label for="auto-interact-interval">Check interval (s)</label>
+                        <input type="number" id="auto-interact-interval" min="1" max="4294967" step="1" required>
+                        <label for="auto-interact-prompt">Target prompt</label>
+                        <input type="text" id="auto-interact-prompt" autocomplete="off" required>
+                        <label for="auto-interact-validate">Validation command</label>
+                        <textarea id="auto-interact-validate" rows="2" spellcheck="false" required></textarea>
+                        <label for="auto-interact-response">Validation response</label>
+                        <input type="text" id="auto-interact-response" autocomplete="off" required>
+                        <div id="auto-interact-commands"></div>
+                        <button id="btn-auto-interact-add" type="button" title="Add command" aria-label="Add command">+</button>
+                        <label for="auto-interact-keywords">Error keywords</label>
+                        <textarea id="auto-interact-keywords" rows="4" spellcheck="false"></textarea>
+                        <button id="btn-auto-interact-save" type="submit" disabled>Save Auto Interact</button>
+                    </div>
+                </form>
             </fieldset>
             <button id="btn-settings-close">Close</button>
         </div>
@@ -333,12 +367,14 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
     function api(method, url, data, cb) {
         var xhr = new XMLHttpRequest();
         xhr.open(method, url, true);
+        xhr.timeout = 15000;
         xhr.setRequestHeader("Content-Type", "application/json");
         xhr.onload = function() {
             try { cb(null, JSON.parse(xhr.responseText), xhr.status); }
             catch(e) { cb(e); }
         };
         xhr.onerror = function() { cb(new Error("Network error")); };
+        xhr.ontimeout = function() { cb(new Error("Request timed out")); };
         xhr.send(data ? JSON.stringify(data) : null);
     }
 
@@ -747,26 +783,190 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
         });
 
         //auto-interact
-        api("GET", "/api/auto_interact_config", null, function(err, conf) {
-            if (err || !conf) return;           
-            document.getElementById("auto-interact-lock").checked = conf.lock;           
-        });
+        loadAutoInteract();
     });
 
     document.getElementById("btn-settings-close").addEventListener("click", function() {
         settingsOverlay.classList.add("hidden");
     });
 
-    document.getElementById("btn-auto-interact-lock-save").addEventListener("click", function() {
-        var locked = document.getElementById("auto-interact-lock").checked;
-        apiRequest("POST", "/api/auto_interact_config", {lock: locked}, function(err, res) {
-            if (!err && res && res.ok) {
-                showSettingsMsg("Lock status saved");
-            }
-            else {
-                showSettingsMsg((res && res.error) || "Failed", true);
-            }
+    var autoForm = document.getElementById("auto-interact-form");
+    var autoCommands = document.getElementById("auto-interact-commands");
+    var autoStatus = document.getElementById("auto-interact-status");
+    var autoReload = document.getElementById("btn-auto-interact-reload");
+    var autoLoaded = false;
+    var autoBusy = false;
+    var autoLoadId = 0;
+
+    function autoMessage(message, failed) {
+        autoStatus.textContent = message;
+        autoStatus.style.color = failed ? "var(--danger)" : "var(--success)";
+    }
+
+    function autoUpdateControls() {
+        var disabled = autoBusy || !autoLoaded || setupLocked;
+        document.querySelectorAll("#auto-interact-controls input, #auto-interact-controls textarea, #auto-interact-controls button").forEach(function(control) {
+            control.disabled = disabled;
         });
+        autoReload.disabled = autoBusy;
+        var rows = autoCommands.children;
+        document.getElementById("btn-auto-interact-add").disabled = disabled || rows.length >= 10;
+        Array.prototype.forEach.call(rows, function(row, index) {
+            row.querySelector("span").textContent = "Command " + (index + 1);
+            row.querySelector(".auto-up").disabled = disabled || index === 0;
+            row.querySelector(".auto-down").disabled = disabled || index === rows.length - 1;
+            row.querySelector(".auto-remove").disabled = disabled || rows.length === 1;
+        });
+    }
+
+    function autoAddCommand(command, timeout) {
+        var row = document.createElement("div");
+        row.className = "auto-command";
+        var actions = document.createElement("div");
+        actions.className = "auto-command-actions";
+        actions.appendChild(document.createElement("span"));
+        [["auto-up", "\u2191", "Move command up"], ["auto-down", "\u2193", "Move command down"], ["auto-remove", "-", "Remove command"]].forEach(function(action) {
+            var button = document.createElement("button");
+            button.type = "button";
+            button.className = action[0];
+            button.textContent = action[1];
+            button.title = action[2];
+            button.setAttribute("aria-label", action[2]);
+            button.addEventListener("click", function() {
+                if (action[0] === "auto-remove") row.remove();
+                else if (action[0] === "auto-up" && row.previousElementSibling) autoCommands.insertBefore(row, row.previousElementSibling);
+                else if (action[0] === "auto-down" && row.nextElementSibling) autoCommands.insertBefore(row.nextElementSibling, row);
+                autoUpdateControls();
+            });
+            actions.appendChild(button);
+        });
+        row.appendChild(actions);
+        var text = document.createElement("textarea");
+        text.className = "auto-command-text";
+        text.rows = 2;
+        text.required = true;
+        text.spellcheck = false;
+        text.setAttribute("aria-label", "Command text");
+        text.value = command;
+        row.appendChild(text);
+        var label = document.createElement("label");
+        label.textContent = "Timeout (s)";
+        var input = document.createElement("input");
+        input.className = "auto-command-timeout";
+        input.type = "number";
+        input.min = "1";
+        input.max = "4294967";
+        input.step = "1";
+        input.required = true;
+        input.value = timeout;
+        label.appendChild(input);
+        row.appendChild(label);
+        autoCommands.appendChild(row);
+    }
+
+    function loadAutoInteract() {
+        if (autoBusy) return;
+        var requestId = ++autoLoadId;
+        autoBusy = true;
+        autoLoaded = false;
+        autoUpdateControls();
+        autoMessage("Loading...", false);
+        api("GET", "/api/auto_interact_config", null, function(err, conf, status) {
+            if (requestId !== autoLoadId) return;
+            autoBusy = false;
+            if (err || status !== 200 || !conf || typeof conf.locked_out !== "boolean" || !conf.cmd ||
+                !Array.isArray(conf.cmd.exec_cmds) || !Array.isArray(conf.cmd.exec_cmds_timeout_s) ||
+                !Array.isArray(conf.cmd.error_keywords) || conf.cmd.exec_cmds.length < 1 ||
+                conf.cmd.exec_cmds.length > 10 || conf.cmd.exec_cmds.length !== conf.cmd.exec_cmds_timeout_s.length) {
+                autoMessage((conf && conf.error) || (err && err.message) || "Failed to load auto interact configuration", true);
+                autoUpdateControls();
+                return;
+            }
+            document.getElementById("auto-interact-lock").checked = conf.locked_out;
+            document.getElementById("auto-interact-interval").value = conf.check_interval_s;
+            document.getElementById("auto-interact-prompt").value = conf.cmd.target_prompt;
+            document.getElementById("auto-interact-validate").value = conf.cmd.validate_cmd;
+            document.getElementById("auto-interact-response").value = conf.cmd.validate_cmd_resp;
+            document.getElementById("auto-interact-keywords").value = conf.cmd.error_keywords.join("\n");
+            autoCommands.textContent = "";
+            conf.cmd.exec_cmds.forEach(function(command, index) {
+                autoAddCommand(command, conf.cmd.exec_cmds_timeout_s[index]);
+            });
+            autoLoaded = true;
+            autoMessage(setupLocked ? "Change the default password before saving" : "", setupLocked);
+            autoUpdateControls();
+        });
+    }
+
+    function autoString(value, maximum, name) {
+        if (!value.length || value.indexOf("\0") !== -1 || new TextEncoder().encode(value).length > maximum) {
+            throw new Error(name + " must be 1-" + maximum + " UTF-8 bytes (no NUL characters)");
+        }
+        return value;
+    }
+
+    function autoNumber(value, name) {
+        var number = Number(value);
+        if (!Number.isInteger(number) || number < 1 || number > 4294967) throw new Error(name + " must be an integer from 1 to 4294967");
+        return number;
+    }
+
+    function autoCommand(value, maximum, name) {
+        if (value && !/[\r\n]$/.test(value)) value += "\n";
+        return autoString(value, maximum, name);
+    }
+
+    function saveAutoInteract(payload) {
+        if (autoBusy || !autoLoaded || setupLocked) return;
+        autoBusy = true;
+        autoUpdateControls();
+        autoMessage("Saving...", false);
+        api("POST", "/api/auto_interact_config", payload, function(err, response, status) {
+            autoBusy = false;
+            var success = !err && status === 200 && response && response.ok;
+            autoMessage(success ? "Auto interact configuration saved" : ((response && response.error) ||
+                ((err && err.message) || "Failed to save") + "; reload to check device state"), !success);
+            autoUpdateControls();
+        });
+    }
+
+    autoReload.addEventListener("click", loadAutoInteract);
+    document.getElementById("btn-auto-interact-add").addEventListener("click", function() {
+        if (autoCommands.children.length >= 10) return;
+        autoAddCommand("", 5);
+        autoUpdateControls();
+        autoCommands.lastElementChild.querySelector("textarea").focus();
+    });
+    document.getElementById("btn-auto-interact-lock-save").addEventListener("click", function() {
+        saveAutoInteract({locked_out: document.getElementById("auto-interact-lock").checked});
+    });
+    autoForm.addEventListener("submit", function(event) {
+        event.preventDefault();
+        try {
+            var commands = [];
+            var timeouts = [];
+            Array.prototype.forEach.call(autoCommands.children, function(row, index) {
+                commands.push(autoCommand(row.querySelector("textarea").value, 59, "Command " + (index + 1)));
+                timeouts.push(autoNumber(row.querySelector("input").value, "Command timeout"));
+            });
+            var keywords = document.getElementById("auto-interact-keywords").value.split(/\r?\n/).filter(function(keyword) { return keyword.length > 0; });
+            if (commands.length < 1 || commands.length > 10) throw new Error("Provide 1-10 commands");
+            if (keywords.length > 10) throw new Error("Provide at most 10 error keywords");
+            keywords.forEach(function(keyword) { autoString(keyword, 19, "Error keyword"); });
+            saveAutoInteract({
+                check_interval_s: autoNumber(document.getElementById("auto-interact-interval").value, "Check interval"),
+                cmd: {
+                    target_prompt: autoString(document.getElementById("auto-interact-prompt").value, 19, "Target prompt"),
+                    validate_cmd: autoCommand(document.getElementById("auto-interact-validate").value, 19, "Validation command"),
+                    validate_cmd_resp: autoString(document.getElementById("auto-interact-response").value, 39, "Validation response"),
+                    exec_cmds: commands,
+                    exec_cmds_timeout_s: timeouts,
+                    error_keywords: keywords
+                }
+            });
+        } catch (error) {
+            autoMessage(error.message, true);
+        }
     });
  
     document.getElementById("btn-ntp-save").addEventListener("click", function() {
