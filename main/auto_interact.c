@@ -2,11 +2,19 @@
 #include <ctype.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <errno.h>
+#include <unistd.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "uart_bridge.h"
+#include "config.h"
+#include "esp_spiffs.h"
+#include "esp_partition.h"
+#include "esp_rom_crc.h"
 
 
 #define TAG "AUTO_INTERACT"
@@ -15,36 +23,32 @@
 #define BUFFER_SIZE         (1 << BUFFER_SIZE_LOG2)
 #define BUFFER_MASK         (BUFFER_SIZE - 1)
 
-// 策略配置结构体：便于未来扩展不同的交互模式（如 Uboot, Linux, Custom CLI）
-typedef struct {
-    const char* target_prompt;      // 目标提示符
-    const char* validate_cmd;       // 验证命令
-    const char* validate_response;  // 验证命令期待的响应包含内容（为空则仅校验再次出现提示符）
-    const char** exec_cmds;         // 待执行的自定义命令数组
-    size_t cmd_count;
-} interact_profile_t;
+static const int64_t ALLOWED_TWO_AUTO_CMD_INTERVAL = (120LL * 1000 * 1000); //2 min
+static const int PORT_INDEX = 0;
 
 // 配置您目前的 U-Boot 自动化需求
-static const char* exec_cmds[] = {
-    "setenv serverip 192.168.1.100\n",
-    "tftpboot 0x81000000 op.bin\n",
-    "bootm 0x81000000\n"
-};
-
-static const int PORT_INDEX = 0;
-static const int64_t CHECK_INTERVAL = 10000;  //10 sec
-static const int64_t CHECK_INTERVAL_TICK = (1000LL * CHECK_INTERVAL);
-static const int64_t ALLOWED_TWO_AUTO_CMD_INTERVAL = (120LL * 1000 * 1000); //2 min
-static const char *error_keywords[] = {"err", "error", "fail", "exception", "not found"};
-static const size_t error_keywords_count = sizeof(error_keywords) / sizeof(error_keywords[0]);
-    
-static const interact_profile_t g_profile = {
+static const auto_interact_cmd_t cmd = {
     .target_prompt = "uboot >",
     .validate_cmd = "version\n",
-    .validate_response = "uboot >", 
-    .exec_cmds = exec_cmds,
-    .cmd_count = sizeof(exec_cmds) / sizeof(exec_cmds[0])
+    .validate_cmd_resp = "uboot >", 
+    .exec_cmds =  {
+                    "setenv serverip 192.168.1.100\n",
+                    "tftpboot 0x81000000 op.bin\n",
+                    "bootm 0x81000000\n"
+                  },
+    .exec_cmds_timeout_s = {5, 300, 20},
+    .error_keywords = {"err", "error", "fail", "exception", "not found"},
+    .error_keywords_count = 5,
+    .cmd_count = 3
 };
+
+static auto_interact_config_t conf = {
+    .locked_out = true, // 熔断锁定标志位
+    .check_interval_s = 10,
+    .cmd = cmd
+};
+
+static auto_interact_config_t finalConf;
 
 // 环形缓冲区结构
 typedef struct {
@@ -57,8 +61,149 @@ static ring_buf_t g_rb;
 static int64_t g_last_update_us = 0;   // 上次收到串口输出的时间戳
 static int64_t g_last_exec_us = 0;     // 上次执行命令集的时间戳
 static uint32_t g_lockout_counter = 0; // 连续高频触发计数器
-static bool g_is_locked_out = true;   // 熔断锁定标志位
 
+static SemaphoreHandle_t conf_mutex = NULL;
+static bool storage_ready = false;
+static bool persisted_locked_out = true;
+static bool initialized = false;
+
+#define AUTO_CONFIG_PATH "/storage/auto_interact.bin"
+#define AUTO_CONFIG_TEMP_PATH "/storage/auto_interact.tmp"
+#define AUTO_CONFIG_BACKUP_PATH "/storage/auto_interact.bak"
+#define AUTO_CONFIG_MAGIC 0x41494346U
+#define AUTO_CONFIG_VERSION 1U
+
+static esp_err_t auto_interact_config_read_file(const char *path, auto_interact_config_t *config);
+
+static bool auto_interact_config_valid(const auto_interact_config_t *config)
+{
+    const auto_interact_cmd_t *commands = &config->cmd;
+    if (config->check_interval_s == 0 || config->check_interval_s > UINT32_MAX / 1000U ||
+        commands->cmd_count == 0 || commands->cmd_count > CONFIG_AUTO_INTERACT_EXEC_CMD_COUNT_MAX_LEN ||
+        commands->error_keywords_count > CONFIG_AUTO_INTERACT_ERROR_KEYWORD_COUNT_MAX_LEN) return false;
+
+    if (!commands->target_prompt[0] || !memchr(commands->target_prompt, 0, sizeof(commands->target_prompt)) ||
+        !commands->validate_cmd[0] || !memchr(commands->validate_cmd, 0, sizeof(commands->validate_cmd)) ||
+        !commands->validate_cmd_resp[0] || !memchr(commands->validate_cmd_resp, 0, sizeof(commands->validate_cmd_resp))) return false;
+
+    for (size_t index = 0; index < commands->cmd_count; index++) {
+        if (!commands->exec_cmds[index][0] ||
+            !memchr(commands->exec_cmds[index], 0, sizeof(commands->exec_cmds[index])) ||
+            commands->exec_cmds_timeout_s[index] == 0 ||
+            commands->exec_cmds_timeout_s[index] > UINT32_MAX / 1000U) return false;
+    }
+    for (size_t index = 0; index < commands->error_keywords_count; index++) {
+        if (!commands->error_keywords[index][0] ||
+            !memchr(commands->error_keywords[index], 0, sizeof(commands->error_keywords[index]))) return false;
+    }
+    return true;
+}
+
+static esp_err_t auto_interact_storage_init(void)
+{
+    esp_vfs_spiffs_conf_t storage = {
+        .base_path = "/storage",
+        .partition_label = "storage",
+        .max_files = 2,
+        .format_if_mount_failed = false,
+    };
+    if (esp_spiffs_mounted("storage")) return ESP_OK;
+    esp_err_t result = esp_vfs_spiffs_register(&storage);
+    if (result != ESP_FAIL) return result;
+
+    const esp_partition_t *partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "storage");
+    if (!partition) return ESP_ERR_NOT_FOUND;
+    uint8_t bytes[256];
+    for (size_t offset = 0; offset < partition->size; offset += sizeof(bytes)) {
+        size_t length = partition->size - offset;
+        if (length > sizeof(bytes)) length = sizeof(bytes);
+        result = esp_partition_read(partition, offset, bytes, length);
+        if (result != ESP_OK) return result;
+        for (size_t index = 0; index < length; index++) {
+            if (bytes[index] != 0xff) return ESP_FAIL;
+        }
+    }
+    storage.format_if_mount_failed = true;
+    return esp_vfs_spiffs_register(&storage);
+}
+
+static esp_err_t auto_interact_config_write(const auto_interact_config_t *config)
+{
+    uint32_t header[] = {
+        AUTO_CONFIG_MAGIC, AUTO_CONFIG_VERSION, sizeof(*config),
+        esp_rom_crc32_le(0, (const uint8_t *)config, sizeof(*config)),
+    };
+    FILE *file = fopen(AUTO_CONFIG_TEMP_PATH, "wb");
+    if (!file) return ESP_FAIL;
+    bool written = fwrite(header, sizeof(header), 1, file) == 1 &&
+        fwrite(config, sizeof(*config), 1, file) == 1;
+    if (fflush(file) != 0) written = false;
+    if (fsync(fileno(file)) != 0) written = false;
+    if (fclose(file) != 0) written = false;
+    if (!written) goto failed;
+
+    auto_interact_config_t *previous = malloc(sizeof(*previous));
+    if (!previous) {
+        remove(AUTO_CONFIG_TEMP_PATH);
+        return ESP_ERR_NO_MEM;
+    }
+    bool primary_valid = auto_interact_config_read_file(AUTO_CONFIG_PATH, previous) == ESP_OK;
+    free(previous);
+    if (primary_valid) {
+        if (remove(AUTO_CONFIG_BACKUP_PATH) != 0 && errno != ENOENT) goto failed;
+        if (rename(AUTO_CONFIG_PATH, AUTO_CONFIG_BACKUP_PATH) != 0) goto failed;
+    } else {
+        if (remove(AUTO_CONFIG_PATH) != 0 && errno != ENOENT) goto failed;
+    }
+    if (rename(AUTO_CONFIG_TEMP_PATH, AUTO_CONFIG_PATH) != 0) {
+        if (primary_valid && rename(AUTO_CONFIG_BACKUP_PATH, AUTO_CONFIG_PATH) != 0) {
+            ESP_LOGE(TAG, "Configuration replacement failed; previous configuration remains in backup");
+        }
+        goto failed;
+    }
+    return ESP_OK;
+
+failed:
+    remove(AUTO_CONFIG_TEMP_PATH);
+    return ESP_FAIL;
+}
+
+static esp_err_t auto_interact_config_read_file(const char *path, auto_interact_config_t *config)
+{
+    FILE *file = fopen(path, "rb");
+    if (!file) return errno == ENOENT ? ESP_ERR_NOT_FOUND : ESP_FAIL;
+    uint32_t header[4];
+    bool valid = fread(header, sizeof(header), 1, file) == 1 &&
+        header[0] == AUTO_CONFIG_MAGIC && header[1] == AUTO_CONFIG_VERSION &&
+        header[2] == sizeof(*config) && fread(config, sizeof(*config), 1, file) == 1;
+    if (valid) valid = fgetc(file) == EOF && !ferror(file);
+    if (fclose(file) != 0) valid = false;
+    if (!valid || header[3] != esp_rom_crc32_le(0, (const uint8_t *)config, sizeof(*config))) return ESP_FAIL;
+    uint8_t lock_value;
+    memcpy(&lock_value, &config->locked_out, sizeof(lock_value));
+    if (lock_value > 1 || !auto_interact_config_valid(config)) return ESP_FAIL;
+    return ESP_OK;
+}
+
+static esp_err_t auto_interact_config_read(auto_interact_config_t *config)
+{
+    esp_err_t primary_result = auto_interact_config_read_file(AUTO_CONFIG_PATH, config);
+    if (primary_result == ESP_OK) return ESP_OK;
+    esp_err_t backup_result = auto_interact_config_read_file(AUTO_CONFIG_BACKUP_PATH, config);
+    if (backup_result == ESP_OK) {
+        ESP_LOGW(TAG, "Recovered configuration from backup");
+        return ESP_OK;
+    }
+    if (primary_result == ESP_ERR_NOT_FOUND && backup_result == ESP_ERR_NOT_FOUND) return ESP_ERR_NOT_FOUND;
+    return ESP_FAIL;
+}
+
+static void init_conf_mutex(void) {
+    if (conf_mutex == NULL) {
+        conf_mutex = xSemaphoreCreateMutex();
+    }
+}
 
 // 新增：发送命令前强行复位缓冲区，防止读到上一次交互残留下来的旧提示符
 void auto_interact_reset_buffer(void) {
@@ -68,6 +213,7 @@ void auto_interact_reset_buffer(void) {
 
 // 1. 同步快速通知函数：无锁、无移动、极快
 void auto_interact_rx_notify(const uint8_t *data, size_t len) {
+    if (!initialized) return;
     if (!data || len == 0) return;
     
     // 快速将数据推入环形缓冲区，满则直接覆盖旧数据
@@ -82,20 +228,66 @@ void auto_interact_rx_notify(const uint8_t *data, size_t len) {
     g_last_update_us = esp_timer_get_time();
 }
 
-// 设置或者清空锁定状态（人工干预）
-void auto_interact_config_set(bool lock) {
-    if (lock) {
-        g_is_locked_out = true;
-        ESP_LOGI(TAG, "Lockout status is set manually.");
-    } else {
-        g_lockout_counter = 0;
-        g_is_locked_out = false;
-        ESP_LOGI(TAG, "Lockout status cleared manually.");
+
+esp_err_t auto_interact_config_set(auto_interact_config_t config, bool update_lock) {
+    if (!initialized || conf_mutex == NULL) return ESP_ERR_INVALID_STATE;
+
+    BaseType_t taken = xSemaphoreTake(conf_mutex, portMAX_DELAY);
+    configASSERT(taken == pdTRUE);
+
+    if (!storage_ready) {
+        xSemaphoreGive(conf_mutex);
+        return ESP_ERR_INVALID_STATE;
     }
+
+    auto_interact_config_t updated = finalConf;
+    if (update_lock) {
+        updated.locked_out = config.locked_out;
+    } else {
+        updated.check_interval_s = config.check_interval_s;
+        updated.cmd = config.cmd;
+    }
+    if (!auto_interact_config_valid(&updated)) {
+        xSemaphoreGive(conf_mutex);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    config = updated;
+    if (!update_lock) config.locked_out = persisted_locked_out;
+    esp_err_t result = auto_interact_config_write(&config);
+    if (result != ESP_OK) {
+        xSemaphoreGive(conf_mutex);
+        ESP_LOGE(TAG, "Failed to save auto interaction configuration");
+        return result;
+    }
+    persisted_locked_out = config.locked_out;
+    finalConf = updated;
+    if (update_lock) {
+        if (finalConf.locked_out) {
+            ESP_LOGI(TAG, "Lockout status is set manually.");
+        } else {
+            g_lockout_counter = 0;
+            ESP_LOGI(TAG, "Lockout status cleared manually.");
+        }
+    }
+    xSemaphoreGive(conf_mutex);
+    return ESP_OK;
 }
 
-bool auto_interact_config_get(void) {
-    return g_is_locked_out;
+auto_interact_config_t auto_interact_config_get(void)
+{
+    if (!initialized || conf_mutex == NULL) {
+        auto_interact_config_t fallback = conf;
+        fallback.locked_out = true;
+        return fallback;
+    }
+
+    BaseType_t taken = xSemaphoreTake(conf_mutex, portMAX_DELAY);
+    configASSERT(taken == pdTRUE);
+
+    auto_interact_config_t ret = finalConf;
+    xSemaphoreGive(conf_mutex);
+    return ret;
 }
 
 // 【新增】将环形缓冲区内容完整线性化复制到临时 buffer 中，方便进行全局关键字检索
@@ -178,8 +370,8 @@ static bool wait_for_response(const char* expected_prompt, uint32_t wait_timeout
     bool has_error = false;
     
     // 使用循环检查缓冲区是否包含任意一个关键字
-    for (size_t i = 0; i < error_keywords_count; i++) {
-        if (strcasestr_custom(linear_buf, error_keywords[i]) != NULL) {
+    for (size_t i = 0; i < conf.cmd.error_keywords_count; i++) {
+        if (strcasestr_custom(linear_buf, conf.cmd.error_keywords[i]) != NULL) {
             has_error = true;
             break; // 只要匹配到一个错误关键字，立即判定为有错并退出循环
         }
@@ -216,29 +408,26 @@ static bool wait_for_response(const char* expected_prompt, uint32_t wait_timeout
 static void auto_interact_task(void *pvParameters) {
     ESP_LOGI(TAG, "auto_interact_task started.");
     
-    if (g_is_locked_out) {
+    if (conf.locked_out) {
         ESP_LOGI(TAG, "auto_interact_task locked out.");
     }
 
-    g_last_update_us = esp_timer_get_time();
-    size_t prompt_len = strlen(g_profile.target_prompt);
-    
-    char *prompt_check_buf = malloc(prompt_len + 1);
-    if (!prompt_check_buf) {
-        ESP_LOGE(TAG, "Failed to allocate memory for task.");
-        vTaskDelete(NULL);
-        return;
-    }
+    g_last_update_us = esp_timer_get_time();   
 
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(CHECK_INTERVAL)); // 每秒轮询一次条件
-        
-        if (g_is_locked_out) {
+        int64_t wait_start_us = esp_timer_get_time();
+        do {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            conf = auto_interact_config_get();
+        } while (esp_timer_get_time() - wait_start_us < (int64_t)conf.check_interval_s * 1000000LL);
+
+        if (conf.locked_out) {
             continue; // 处于熔断锁定状态，跳过检测
         }
         
+        int64_t check_interval_tick = (int64_t)conf.check_interval_s * 1000000LL;
         int64_t now = esp_timer_get_time();
-        bool withinSlient = (now - g_last_update_us) <= CHECK_INTERVAL_TICK;
+        bool withinSlient = (now - g_last_update_us) <= check_interval_tick;        
         
         // 条件一：静默期检查（大于 10 秒钟没有收到任何新输入，说明疯狂输出已停止，处于稳定提示符状态）
         if (withinSlient) {
@@ -246,22 +435,27 @@ static void auto_interact_task(void *pvParameters) {
         }    
 
         // 条件二：检查尾部字符是否精确匹配当前设定的提示符
+        size_t prompt_len = strlen(conf.cmd.target_prompt);        
+        char prompt_check_buf[sizeof(conf.cmd.target_prompt)];
         rb_read_tail(prompt_check_buf, prompt_len);        
 
         ESP_LOGI(TAG, "DEBUG for rb_read_tail output: '%s'", prompt_check_buf);
-        bool not_expected_prompt = strcmp(prompt_check_buf, g_profile.target_prompt) != 0;
+        bool not_expected_prompt = strcmp(prompt_check_buf, conf.cmd.target_prompt) != 0;
         if (not_expected_prompt) {
             continue;
         }
 
-        ESP_LOGI(TAG, "Matched target prompt '%s'. Checking anti-damage counters...", g_profile.target_prompt);
+        ESP_LOGI(TAG, "Matched target prompt '%s'. Checking anti-damage counters...", conf.cmd.target_prompt);
 
         // 3. 硬件防损坏/无限重启环路熔断判定
         if (g_last_exec_us > 0 && (now - g_last_exec_us) < ALLOWED_TWO_AUTO_CMD_INTERVAL) {
             g_lockout_counter++;
             ESP_LOGW(TAG, "Consecutive quick execution loop detected. Counter: %ld/3", g_lockout_counter);
             if (g_lockout_counter >= 3) {
-                g_is_locked_out = true;
+                conf.locked_out = true;
+                xSemaphoreTake(conf_mutex, portMAX_DELAY);
+                finalConf.locked_out = true;
+                xSemaphoreGive(conf_mutex);
                 ESP_LOGE(TAG, "CRITICAL: Hard protection active! Auto interact disabled to prevent device damage.");
                 continue;
             }
@@ -274,24 +468,34 @@ static void auto_interact_task(void *pvParameters) {
         // 条件三：发送二次验证命令（例如 version）
         auto_interact_reset_buffer();
         ESP_LOGI(TAG, "Sending validation command...");
-        uart_bridge_send(PORT_INDEX, (const uint8_t*)g_profile.validate_cmd, strlen(g_profile.validate_cmd));       
+        esp_err_t send_result = uart_bridge_send(PORT_INDEX, (const uint8_t*)conf.cmd.validate_cmd, strlen(conf.cmd.validate_cmd));       
+        if (send_result != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to send validation command. Error: %d", send_result);
+            continue;
+        }
        
         // 检查二次验证是否通过
-        if (wait_for_response(g_profile.validate_response, 150, 3000, false)) {
+        if (wait_for_response(conf.cmd.validate_cmd_resp, 150, 5000, false)) {
             ESP_LOGI(TAG, "Validation passed. Executing auto command sequence...");
             
             bool seq_success = true;
             // 顺序输入交互命令集合
-            for (size_t i = 0; i < g_profile.cmd_count; i++) {
+            for (size_t i = 0; i < conf.cmd.cmd_count; i++) {
                 auto_interact_reset_buffer();
-                ESP_LOGI(TAG, "Sending sequence [%d/%d]: %s", i + 1, g_profile.cmd_count, g_profile.exec_cmds[i]);
-                uart_bridge_send(PORT_INDEX, (const uint8_t*)g_profile.exec_cmds[i], strlen(g_profile.exec_cmds[i]));                
+                ESP_LOGI(TAG, "Sending sequence [%zu/%zu]: %s", i + 1, conf.cmd.cmd_count, conf.cmd.exec_cmds[i]);
+                send_result = uart_bridge_send(PORT_INDEX, (const uint8_t*)conf.cmd.exec_cmds[i], strlen(conf.cmd.exec_cmds[i]));                
+                if (send_result != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to send command index %d. Error: %d", (int)i, send_result);
+                    seq_success = false;
+                    break;
+                }            
                 
                 // 【改动点】动态判定当前循环处理的是否为最后一条命令
-                bool is_last = (i == (g_profile.cmd_count - 1));
+                bool is_last = (i == (conf.cmd.cmd_count - 1));
                 
                 // 【改动点】将 is_last 标志传入重构后的函数中
-                if (!wait_for_response(g_profile.target_prompt, 100, 5000, is_last)) {
+                uint32_t timeout = conf.cmd.exec_cmds_timeout_s[i] * 1000U;
+                if (!wait_for_response(conf.cmd.target_prompt, 150, timeout, is_last)) {
                     ESP_LOGE(TAG, "Command index %d failed or timed out unconditionally. Aborting sequence.", (int)i);
                     seq_success = false;
                     break; 
@@ -303,25 +507,61 @@ static void auto_interact_task(void *pvParameters) {
             }
         } else {
             ESP_LOGW(TAG, "Validation failed. Target environment did not reply as expected.");
-        }       
-        
-        // 重置更新时间，强制下一次状态检测至少在 10s 之后
-        // comment out because task delay is 10s
-        //g_last_update_us = esp_timer_get_time();
-      
+        }      
     }
-    free(prompt_check_buf);
 }
 
-void auto_interact_init(void) {
+esp_err_t auto_interact_init(void) {
+    init_conf_mutex();
+    if (conf_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create config mutex");
+        return ESP_ERR_NO_MEM;
+    }
+
+    esp_err_t storage_result = auto_interact_storage_init();
+    storage_ready = storage_result == ESP_OK;
+    if (storage_ready) {
+        auto_interact_config_t loaded = {0};
+        esp_err_t load_result = auto_interact_config_read(&loaded);
+        if (load_result == ESP_OK) {
+            conf = loaded;
+            ESP_LOGI(TAG, "Loaded auto interaction configuration");
+        } else if (load_result == ESP_ERR_NOT_FOUND) {
+            storage_result = auto_interact_config_write(&conf);
+            if (storage_result != ESP_OK) {
+                conf.locked_out = true;
+                ESP_LOGE(TAG, "Failed to save defaults; auto interaction remains locked");
+            }
+        } else {
+            conf.locked_out = true;
+            ESP_LOGW(TAG, "Invalid configuration files; using locked defaults");
+        }
+    } else {
+        conf.locked_out = true;
+        ESP_LOGE(TAG, "Configuration storage unavailable (%s); continuing with auto interaction locked",
+                 esp_err_to_name(storage_result));
+    }
+    persisted_locked_out = conf.locked_out;
+    finalConf = conf;
+    
     memset(&g_rb, 0, sizeof(ring_buf_t));
     // 优先级 5（中等），绑定到 Core 1（避开 WiFi 核心 Core 0），分配 4KB 栈空间
    
+    BaseType_t result;
     #if CONFIG_IDF_TARGET_ESP32S3
         //for esp32-s3
-        xTaskCreatePinnedToCore(auto_interact_task, "auto_interact_task", 4096, NULL, 5, NULL, 1);
+        result = xTaskCreatePinnedToCore(auto_interact_task, "auto_interact_task", 4096, NULL, 5, NULL, 1);
     #else
         //for esp32-c3/c6
-        xTaskCreate( auto_interact_task, "auto_interact_task", 4096, NULL, 5, NULL);
+        result = xTaskCreate( auto_interact_task, "auto_interact_task", 4096, NULL, 5, NULL);
     #endif
+
+    if (result != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create auto interact task");
+        vSemaphoreDelete(conf_mutex);
+        conf_mutex = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    initialized = true;
+    return ESP_OK;
 }
