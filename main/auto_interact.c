@@ -107,21 +107,47 @@ static esp_err_t auto_interact_storage_init(void)
         .max_files = 2,
         .format_if_mount_failed = false,
     };
-    if (esp_spiffs_mounted("storage")) return ESP_OK;
-    esp_err_t result = esp_vfs_spiffs_register(&storage);
-    if (result != ESP_FAIL) return result;
 
-    const esp_partition_t *partition = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "storage");
-    if (!partition) return ESP_ERR_NOT_FOUND;
+    if (esp_spiffs_mounted("storage")) {
+        ESP_LOGI(TAG, "esp_spiffs_mounted done");
+        return ESP_OK;
+    }
+    else {
+        ESP_LOGE(TAG, "esp_spiffs_mounted not done, start to mount");
+    }
+
+    esp_err_t result = esp_vfs_spiffs_register(&storage);
+    if (result != ESP_FAIL)  {
+        ESP_LOGI(TAG, "esp_vfs_spiffs_register done");
+        return result;
+    }
+    else {
+         ESP_LOGE(TAG, "esp_vfs_spiffs_register not done, start to register");
+    }
+
+    const esp_partition_t *partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "storage");
+    if (!partition) { 
+        ESP_LOGE(TAG, "esp_partition_find_first failed");
+        return ESP_ERR_NOT_FOUND;
+    }
+    else {
+        ESP_LOGI(TAG, "esp_partition_find_first done, start to read partition");
+    }
+
     uint8_t bytes[256];
     for (size_t offset = 0; offset < partition->size; offset += sizeof(bytes)) {
         size_t length = partition->size - offset;
         if (length > sizeof(bytes)) length = sizeof(bytes);
         result = esp_partition_read(partition, offset, bytes, length);
-        if (result != ESP_OK) return result;
+        if (result != ESP_OK) {  
+            ESP_LOGE(TAG, "esp_partition_read failed");
+            return result;
+        }
         for (size_t index = 0; index < length; index++) {
-            if (bytes[index] != 0xff) return ESP_FAIL;
+            if (bytes[index] != 0xff) {
+                ESP_LOGE(TAG, "failed: storage data is not 0xff");
+                return ESP_FAIL;
+            }
         }
     }
     storage.format_if_mount_failed = true;
@@ -135,31 +161,73 @@ static esp_err_t auto_interact_config_write(const auto_interact_config_t *config
         esp_rom_crc32_le(0, (const uint8_t *)config, sizeof(*config)),
     };
     FILE *file = fopen(AUTO_CONFIG_TEMP_PATH, "wb");
-    if (!file) return ESP_FAIL;
-    bool written = fwrite(header, sizeof(header), 1, file) == 1 &&
-        fwrite(config, sizeof(*config), 1, file) == 1;
-    if (fflush(file) != 0) written = false;
-    if (fsync(fileno(file)) != 0) written = false;
-    if (fclose(file) != 0) written = false;
-    if (!written) goto failed;
+    if (!file) {
+        ESP_LOGE(TAG, "open to write AUTO_CONFIG_TEMP_PATH failed");
+        return ESP_FAIL;
+    } 
+    ESP_LOGI(TAG, "Writing header (magic=%08lx, version=%lu, size=%lu) to %s",
+             (unsigned long)AUTO_CONFIG_MAGIC, (unsigned long)AUTO_CONFIG_VERSION,
+             (unsigned long)sizeof(*config), AUTO_CONFIG_TEMP_PATH);
+    if (fwrite(header, sizeof(header), 1, file) != 1) {
+        ESP_LOGE(TAG, "fwrite(header) failed");
+        goto failed;
+    }
+    ESP_LOGI(TAG, "Header written OK (%zu bytes)", sizeof(header));
+
+    ESP_LOGI(TAG, "Writing config struct (%zu bytes)...", sizeof(*config));
+    if (fwrite(config, sizeof(*config), 1, file) != 1) {
+        ESP_LOGE(TAG, "fwrite(config) failed");
+        goto failed;
+    }
+    ESP_LOGI(TAG, "Config written OK");
+
+    ESP_LOGI(TAG, "Flushing file...");
+    if (fflush(file) != 0) {
+        ESP_LOGE(TAG, "fflush() failed: %s", strerror(errno));
+        goto failed;
+    }
+    ESP_LOGI(TAG, "fflush OK");
+
+    // Note: fsync() is not supported by SPIFFS on ESP-IDF; fflush() is sufficient.
+
+    ESP_LOGI(TAG, "Closing file...");
+    if (fclose(file) != 0) {
+        ESP_LOGE(TAG, "fclose() failed: %s", strerror(errno));
+        goto failed;
+    }
+    ESP_LOGI(TAG, "File closed OK");
 
     auto_interact_config_t *previous = malloc(sizeof(*previous));
     if (!previous) {
+        ESP_LOGE(TAG, "malloc auto_interact_config_t failed: ESP_ERR_NO_MEM");
         remove(AUTO_CONFIG_TEMP_PATH);
         return ESP_ERR_NO_MEM;
     }
     bool primary_valid = auto_interact_config_read_file(AUTO_CONFIG_PATH, previous) == ESP_OK;
     free(previous);
     if (primary_valid) {
-        if (remove(AUTO_CONFIG_BACKUP_PATH) != 0 && errno != ENOENT) goto failed;
-        if (rename(AUTO_CONFIG_PATH, AUTO_CONFIG_BACKUP_PATH) != 0) goto failed;
+        if (remove(AUTO_CONFIG_BACKUP_PATH) != 0 && errno != ENOENT) {
+            ESP_LOGE(TAG, "remove(AUTO_CONFIG_BACKUP_PATH) failed");
+            goto failed;
+        }
+        if (rename(AUTO_CONFIG_PATH, AUTO_CONFIG_BACKUP_PATH) != 0) {
+            ESP_LOGE(TAG, "rename(AUTO_CONFIG_PATH, AUTO_CONFIG_BACKUP_PATH) failed");
+            goto failed;
+        }
     } else {
-        if (remove(AUTO_CONFIG_PATH) != 0 && errno != ENOENT) goto failed;
+        if (remove(AUTO_CONFIG_PATH) != 0 && errno != ENOENT) {
+            ESP_LOGE(TAG, "remove(AUTO_CONFIG_PATH) failed");
+            goto failed;
+        }
     }
     if (rename(AUTO_CONFIG_TEMP_PATH, AUTO_CONFIG_PATH) != 0) {
         if (primary_valid && rename(AUTO_CONFIG_BACKUP_PATH, AUTO_CONFIG_PATH) != 0) {
             ESP_LOGE(TAG, "Configuration replacement failed; previous configuration remains in backup");
         }
+        else {
+            ESP_LOGE(TAG, "rename(AUTO_CONFIG_TEMP_PATH, AUTO_CONFIG_PATH) failed");
+        }
+
         goto failed;
     }
     return ESP_OK;
@@ -189,13 +257,24 @@ static esp_err_t auto_interact_config_read_file(const char *path, auto_interact_
 static esp_err_t auto_interact_config_read(auto_interact_config_t *config)
 {
     esp_err_t primary_result = auto_interact_config_read_file(AUTO_CONFIG_PATH, config);
-    if (primary_result == ESP_OK) return ESP_OK;
+    if (primary_result == ESP_OK) {
+        ESP_LOGI(TAG, "primary_result from auto_interact_config_read_file done");
+        return ESP_OK;
+    }
+    else {
+        ESP_LOGE(TAG, "primary_result failed");
+    }
     esp_err_t backup_result = auto_interact_config_read_file(AUTO_CONFIG_BACKUP_PATH, config);
     if (backup_result == ESP_OK) {
         ESP_LOGW(TAG, "Recovered configuration from backup");
         return ESP_OK;
     }
-    if (primary_result == ESP_ERR_NOT_FOUND && backup_result == ESP_ERR_NOT_FOUND) return ESP_ERR_NOT_FOUND;
+    if (primary_result == ESP_ERR_NOT_FOUND && backup_result == ESP_ERR_NOT_FOUND) { 
+        ESP_LOGE(TAG, "auto_interact_config_read_file: not found");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    ESP_LOGE(TAG, "auto_interact_config_read_file failed");
     return ESP_FAIL;
 }
 
@@ -439,7 +518,7 @@ static void auto_interact_task(void *pvParameters) {
         char prompt_check_buf[sizeof(conf.cmd.target_prompt)];
         rb_read_tail(prompt_check_buf, prompt_len);        
 
-        ESP_LOGI(TAG, "DEBUG for rb_read_tail output: '%s'", prompt_check_buf);
+        ESP_LOGI(TAG, "rb_read_tail output: '%s'", prompt_check_buf);
         bool not_expected_prompt = strcmp(prompt_check_buf, conf.cmd.target_prompt) != 0;
         if (not_expected_prompt) {
             continue;
