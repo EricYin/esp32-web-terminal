@@ -297,7 +297,8 @@ body {
                         <textarea id="auto-interact-keywords" rows="4" spellcheck="false"></textarea>
                         <label for="auto-interact-line-ending">Command line ending</label>
                         <select id="auto-interact-line-ending">
-                            <option value="lf" selected>\n (LF, 0x0A)</option>
+                            <option value="none" selected>none</option>
+                            <option value="lf">\n (LF, 0x0A)</option>
                             <option value="cr">\r (CR, 0x0D)</option>
                             <option value="crlf">\r\n (CRLF, 0x0D 0x0A)</option>
                         </select>
@@ -920,7 +921,7 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
     }
 
     function autoCommand(value, maximum, name) {
-        var endings = {lf: "\n", cr: "\r", crlf: "\r\n"};
+        var endings = {none: "", lf: "\n", cr: "\r", crlf: "\r\n"};
         var ending = endings[document.getElementById("auto-interact-line-ending").value];       
         value += ending; 
         return autoString(value, maximum, name);
