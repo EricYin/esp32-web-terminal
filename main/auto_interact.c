@@ -407,11 +407,10 @@ static void rb_read_tail(char *dest, size_t n) {
     dest[n] = '\0';
 }
 
-
 // 【核心重构】等待 U-Boot 响应函数
 // 结束条件：看到控制台提示符比如 uboot 提示符为结尾；结束后检查缓冲区是否含有错误字串。
 // 例外逻辑：最后一条命令超时视为成功；若超时且没有停留在当前控制台提示符比如 uboot 提示符则设为失败。
-static bool wait_for_response(const char* expected_prompt, uint32_t wait_timeout_ms, uint32_t timeout_ms, bool is_last_cmd) {
+static bool wait_for_response(const char* expected_prompt, char error_keywords[][CONFIG_AUTO_INTERACT_ERROR_KEYWORD_MAX_LEN], size_t error_keywords_count, uint32_t wait_timeout_ms, uint32_t timeout_ms, bool is_last_cmd) {
 
     // 稍作延时，错开刚输入的命令自身
     vTaskDelay(pdMS_TO_TICKS(wait_timeout_ms));
@@ -449,8 +448,8 @@ static bool wait_for_response(const char* expected_prompt, uint32_t wait_timeout
     bool has_error = false;
     
     // 使用循环检查缓冲区是否包含任意一个关键字
-    for (size_t i = 0; i < conf.cmd.error_keywords_count; i++) {
-        if (strcasestr_custom(linear_buf, conf.cmd.error_keywords[i]) != NULL) {
+    for (size_t i = 0; i < error_keywords_count; i++) {
+        if (strcasestr_custom(linear_buf, error_keywords[i]) != NULL) {
             has_error = true;
             break; // 只要匹配到一个错误关键字，立即判定为有错并退出循环
         }
@@ -481,6 +480,47 @@ static bool wait_for_response(const char* expected_prompt, uint32_t wait_timeout
             return false; // 非最后一条命令超时，失败
         }
     }
+}
+
+static esp_err_t run_cmd(auto_interact_cmd_t cmd) {
+    //发送验证命令（例如 version）
+    auto_interact_reset_buffer();
+    ESP_LOGI(TAG, "Sending validation command...");
+    esp_err_t send_result = uart_bridge_send(PORT_INDEX, (const uint8_t*)cmd.validate_cmd, strlen(cmd.validate_cmd));       
+    if (send_result != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send validation command. Error: %d", send_result);
+        return ESP_FAIL;
+    }   
+    // 检查验证是否通过
+    if (!wait_for_response(cmd.validate_cmd_resp, cmd.error_keywords, cmd.error_keywords_count, 150, 5000, false)) {
+        ESP_LOGE(TAG, "validation command failed. Error: %d", send_result);
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "Validation passed. Executing auto command sequence...");    
+    // 顺序输入交互命令集合
+    for (size_t i = 0; i < cmd.cmd_count; i++) {
+        auto_interact_reset_buffer();
+        ESP_LOGI(TAG, "Sending sequence [%zu/%zu]: %s", i + 1, cmd.cmd_count, cmd.exec_cmds[i]);
+        send_result = uart_bridge_send(PORT_INDEX, (const uint8_t*)cmd.exec_cmds[i], strlen(cmd.exec_cmds[i]));                
+        if (send_result != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to send command index %d. Error: %d", (int)i, send_result);
+            return ESP_FAIL;
+        }            
+        
+        // 【改动点】动态判定当前循环处理的是否为最后一条命令
+        bool is_last = (i == (cmd.cmd_count - 1));
+        
+        // 【改动点】将 is_last 标志传入重构后的函数中
+        uint32_t timeout = cmd.exec_cmds_timeout_s[i] * 1000U;
+        if (!wait_for_response(cmd.target_prompt, cmd.error_keywords, cmd.error_keywords_count, 150, timeout, is_last)) {
+            ESP_LOGE(TAG, "Command index %d failed or timed out unconditionally. Aborting sequence.", (int)i);
+            return ESP_FAIL;
+        }    
+    }    
+
+    ESP_LOGI(TAG, "All automated actions completed successfully.");
+    return ESP_OK;
 }
 
 // 2. 核心检测与执行状态机 Task
@@ -538,55 +578,15 @@ static void auto_interact_task(void *pvParameters) {
                 ESP_LOGE(TAG, "CRITICAL: Hard protection active! Auto interact disabled to prevent device damage.");
                 continue;
             }
-        } else {
+        } 
+        else {
             g_lockout_counter = 0; // 正常间隔，清零连续计数
-        }
+        }       
         
-        g_last_exec_us = now; // 记录本次交互尝试的时间戳
+        run_cmd(conf.cmd);     
         
-        // 条件三：发送二次验证命令（例如 version）
-        auto_interact_reset_buffer();
-        ESP_LOGI(TAG, "Sending validation command...");
-        esp_err_t send_result = uart_bridge_send(PORT_INDEX, (const uint8_t*)conf.cmd.validate_cmd, strlen(conf.cmd.validate_cmd));       
-        if (send_result != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to send validation command. Error: %d", send_result);
-            continue;
-        }
-       
-        // 检查二次验证是否通过
-        if (wait_for_response(conf.cmd.validate_cmd_resp, 150, 5000, false)) {
-            ESP_LOGI(TAG, "Validation passed. Executing auto command sequence...");
-            
-            bool seq_success = true;
-            // 顺序输入交互命令集合
-            for (size_t i = 0; i < conf.cmd.cmd_count; i++) {
-                auto_interact_reset_buffer();
-                ESP_LOGI(TAG, "Sending sequence [%zu/%zu]: %s", i + 1, conf.cmd.cmd_count, conf.cmd.exec_cmds[i]);
-                send_result = uart_bridge_send(PORT_INDEX, (const uint8_t*)conf.cmd.exec_cmds[i], strlen(conf.cmd.exec_cmds[i]));                
-                if (send_result != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to send command index %d. Error: %d", (int)i, send_result);
-                    seq_success = false;
-                    break;
-                }            
-                
-                // 【改动点】动态判定当前循环处理的是否为最后一条命令
-                bool is_last = (i == (conf.cmd.cmd_count - 1));
-                
-                // 【改动点】将 is_last 标志传入重构后的函数中
-                uint32_t timeout = conf.cmd.exec_cmds_timeout_s[i] * 1000U;
-                if (!wait_for_response(conf.cmd.target_prompt, 150, timeout, is_last)) {
-                    ESP_LOGE(TAG, "Command index %d failed or timed out unconditionally. Aborting sequence.", (int)i);
-                    seq_success = false;
-                    break; 
-                }
-            }
-            
-            if (seq_success) {
-                ESP_LOGI(TAG, "All automated actions completed successfully.");
-            }
-        } else {
-            ESP_LOGW(TAG, "Validation failed. Target environment did not reply as expected.");
-        }      
+        // 记录本次交互尝试的时间戳
+        g_last_exec_us = now; 
     }
 }
 
