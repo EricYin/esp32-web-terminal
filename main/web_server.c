@@ -556,54 +556,6 @@ static esp_err_t handle_404(httpd_req_t *req, httpd_err_code_t err)
 }
 
 // --- API handlers ---
-static esp_err_t handle_auto_interact_run_cmd(httpd_req_t *req) {
-    if (!require_auth(req)) return ESP_OK;
-    if (!require_password_changed(req)) return ESP_OK;
-    
-    if (req->content_len > 8192) return send_json_error(req, 400, "Invalid request size");
-    char *buf = malloc(req->content_len + 1);
-    if (!buf) return send_json_error(req, 500, "Out of memory");
-    int len = read_body(req, buf, req->content_len + 1);
-    cJSON *command = len > 0 ? cJSON_Parse(buf) : NULL;
-    free(buf);
-    if (len == 0) return send_json_error(req, 400, "Empty request body");
-    if (len < 0) return send_json_error(req, 400, "Invalid request size");
-    if (!command) return send_json_error(req, 400, "Invalid JSON");
-
-    const char *error = "";
-    //const cJSON *command = cJSON_GetObjectItemCaseSensitive(json, "cmd");
-    if (cJSON_IsNull(command) || !cJSON_IsObject(command)) {
-        error = "cmd must be an object";
-        goto invalid;
-    }
-    
-    if (!command->child) {
-        error = "no child in cmd";
-        goto invalid;
-    }
-    
-    auto_interact_cmd_t cmd = {0};    
-    if (!auto_interact_json_cmd(command, &cmd)) { 
-        error = "Invalid cmd configuration";
-        goto invalid;
-    }
-    
-    esp_err_t result = auto_interact_run_cmd(cmd);
-    if (result != ESP_OK) {
-        error = "Failed to run cmd";
-        goto invalid;
-    }
-    
-    cJSON_Delete(command); 
-    httpd_resp_set_type(req, "application/json");
-    set_cors_headers(req);
-    return httpd_resp_send(req, "{\"ok\":true}", 11);
-
-invalid:
-    cJSON_Delete(command);
-    return send_json_error(req, 400, error);
-}
-
 static bool auto_interact_json_uint(const cJSON *item, uint32_t minimum, uint32_t *value)
 {
     if (!cJSON_IsNumber(item) || !(item->valuedouble >= minimum &&
@@ -791,6 +743,54 @@ static esp_err_t handle_auto_interact_config_get(httpd_req_t *req)
 fail:
     cJSON_Delete(root);
     return send_json_error(req, 500, "Out of memory");
+}
+
+static esp_err_t handle_auto_interact_run_cmd(httpd_req_t *req) {
+    if (!require_auth(req)) return ESP_OK;
+    if (!require_password_changed(req)) return ESP_OK;
+    
+    if (req->content_len > 8192) return send_json_error(req, 400, "Invalid request size");
+    char *buf = malloc(req->content_len + 1);
+    if (!buf) return send_json_error(req, 500, "Out of memory");
+    int len = read_body(req, buf, req->content_len + 1);
+    cJSON *command = len > 0 ? cJSON_Parse(buf) : NULL;
+    free(buf);
+    if (len == 0) return send_json_error(req, 400, "Empty request body");
+    if (len < 0) return send_json_error(req, 400, "Invalid request size");
+    if (!command) return send_json_error(req, 400, "Invalid JSON");
+
+    const char *error = "";
+    //const cJSON *command = cJSON_GetObjectItemCaseSensitive(json, "cmd");
+    if (cJSON_IsNull(command) || !cJSON_IsObject(command)) {
+        error = "cmd must be an object";
+        goto invalid;
+    }
+    
+    if (!command->child) {
+        error = "no child in cmd";
+        goto invalid;
+    }
+    
+    auto_interact_cmd_t cmd = {0};    
+    if (!auto_interact_json_cmd(command, &cmd)) { 
+        error = "Invalid cmd configuration";
+        goto invalid;
+    }
+    
+    esp_err_t result = auto_interact_run_cmd(cmd);
+    if (result != ESP_OK) {
+        error = "Failed to run cmd";
+        goto invalid;
+    }
+    
+    cJSON_Delete(command); 
+    httpd_resp_set_type(req, "application/json");
+    set_cors_headers(req);
+    return httpd_resp_send(req, "{\"ok\":true}", 11);
+
+invalid:
+    cJSON_Delete(command);
+    return send_json_error(req, 400, error);
 }
 
 static esp_err_t handle_login(httpd_req_t *req)

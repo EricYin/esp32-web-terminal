@@ -420,31 +420,37 @@ static void rb_read_tail(char *dest, size_t n) {
 // 【核心重构】等待 U-Boot 响应函数
 // 结束条件：看到控制台提示符比如 uboot 提示符为结尾；结束后检查缓冲区是否含有错误字串。
 // 例外逻辑：最后一条命令超时视为成功；若超时且没有停留在当前控制台提示符比如 uboot 提示符则设为失败。
-static bool wait_for_response(const char* expected_prompt, char error_keywords[][CONFIG_AUTO_INTERACT_ERROR_KEYWORD_MAX_LEN], size_t error_keywords_count, uint32_t wait_timeout_ms, uint32_t timeout_ms, bool is_last_cmd) {
+static bool wait_for_response(const char* expected_prompt, const char* expected_resp, char error_keywords[][CONFIG_AUTO_INTERACT_ERROR_KEYWORD_MAX_LEN], size_t error_keywords_count, uint32_t wait_timeout_ms, uint32_t timeout_ms, bool is_last_cmd) {
 
     // 稍作延时，错开刚输入的命令自身
     vTaskDelay(pdMS_TO_TICKS(wait_timeout_ms));
+    //return true;
 
     size_t prompt_len = strlen(expected_prompt);
     char *tail_buf = malloc(prompt_len + 1);
     if (!tail_buf) return false;
     
-    int64_t start = esp_timer_get_time();
     bool seen_prompt_at_tail = false;
-    
+    int64_t start = esp_timer_get_time();   
+    int64_t now = esp_timer_get_time();
+    int64_t delta = (now - start);
+    int64_t max = (1000LL * timeout_ms);
     // 非阻塞轮询：检查当前环形缓冲区的“最末尾”是否为指定的提示符
-    while ((esp_timer_get_time() - start) < (1000LL * timeout_ms)) {
+    while (delta < max) {
         uint32_t current_head = g_rb.head;
-        size_t available = current_head > BUFFER_SIZE ? BUFFER_SIZE : current_head;
-        
+        size_t available = current_head > BUFFER_SIZE ? BUFFER_SIZE : current_head;        
         if (available >= prompt_len) {
             rb_read_tail(tail_buf, prompt_len);
+            ESP_LOGI(TAG, "rb_read_tail for response: '%s'", tail_buf);
             if (strcmp(tail_buf, expected_prompt) == 0) {
                 seen_prompt_at_tail = true;
                 break; // 看到提示符为结尾，立刻退出
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(20)); // 降频检查
+        vTaskDelay(pdMS_TO_TICKS(1000)); 
+        now = esp_timer_get_time();
+        delta = (now - start);
+        ESP_LOGI(TAG, "now: %" PRId64 ", delta: %" PRId64 ", max: %" PRId64, now, delta, max);
     }
     free(tail_buf);
 
@@ -456,10 +462,18 @@ static bool wait_for_response(const char* expected_prompt, char error_keywords[]
     rb_snapshot_to_linear(linear_buf, &current_len);
     
     bool has_error = false;
+
+    if (expected_resp != NULL && strcasestr_custom(linear_buf, expected_resp) == NULL) {
+        has_error = true;
+        ESP_LOGE(TAG, "Expected response key text not found: %s", expected_resp);
+        free(linear_buf);
+        return false;
+    }
     
     // 使用循环检查缓冲区是否包含任意一个关键字
     for (size_t i = 0; i < error_keywords_count; i++) {
         if (strcasestr_custom(linear_buf, error_keywords[i]) != NULL) {
+            ESP_LOGE(TAG, "Error key text found: %s", error_keywords[i]);
             has_error = true;
             break; // 只要匹配到一个错误关键字，立即判定为有错并退出循环
         }
@@ -502,7 +516,7 @@ esp_err_t auto_interact_run_cmd(auto_interact_cmd_t cmd) {
         return ESP_FAIL;
     }   
     // 检查验证是否通过
-    if (!wait_for_response(cmd.validate_cmd_resp, cmd.error_keywords, cmd.error_keywords_count, 150, 5000, false)) {
+    if (!wait_for_response(cmd.target_prompt, cmd.validate_cmd_resp, cmd.error_keywords, cmd.error_keywords_count, 150, 5000, false)) {
         ESP_LOGE(TAG, "validation command failed. Error: %d", send_result);
         return ESP_FAIL;
     }
@@ -523,7 +537,7 @@ esp_err_t auto_interact_run_cmd(auto_interact_cmd_t cmd) {
         
         // 【改动点】将 is_last 标志传入重构后的函数中
         uint32_t timeout = cmd.exec_cmds_timeout_s[i] * 1000U;
-        if (!wait_for_response(cmd.target_prompt, cmd.error_keywords, cmd.error_keywords_count, 150, timeout, is_last)) {
+        if (!wait_for_response(cmd.target_prompt, NULL, cmd.error_keywords, cmd.error_keywords_count, 150, timeout, is_last)) {
             ESP_LOGE(TAG, "Command index %d failed or timed out unconditionally. Aborting sequence.", (int)i);
             return ESP_FAIL;
         }    
@@ -593,7 +607,7 @@ static void auto_interact_task(void *pvParameters) {
             g_lockout_counter = 0; // 正常间隔，清零连续计数
         }       
         
-        run_cmd(conf.cmd);     
+        auto_interact_run_cmd(conf.cmd);     
         
         // 记录本次交互尝试的时间戳
         g_last_exec_us = now; 
