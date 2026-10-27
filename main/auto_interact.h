@@ -18,6 +18,6 @@ esp_err_t auto_interact_config_set(auto_interact_config_t config, bool update_lo
 // 获取当前锁定状态（用于前端页面/API 展示）
 auto_interact_config_t auto_interact_config_get(void);
 
-esp_err_t run_cmd(auto_interact_cmd_t cmd);
+esp_err_t auto_interact_run_cmd(auto_interact_cmd_t cmd);
 
 #endif // AUTO_INTERACT_H
