@@ -482,7 +482,7 @@ static bool wait_for_response(const char* expected_prompt, char error_keywords[]
     }
 }
 
-static esp_err_t run_cmd(auto_interact_cmd_t cmd) {
+esp_err_t run_cmd(auto_interact_cmd_t cmd) {
     //发送验证命令（例如 version）
     auto_interact_reset_buffer();
     ESP_LOGI(TAG, "Sending validation command...");
