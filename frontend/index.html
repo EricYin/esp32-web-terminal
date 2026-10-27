@@ -302,7 +302,8 @@ body {
                             <option value="cr">\r (CR, 0x0D)</option>
                             <option value="crlf">\r\n (CRLF, 0x0D 0x0A)</option>
                         </select>
-                        <div style="font-size:12px;margin-bottom:8px">Appended literally to the validation command and all execution commands. No escape conversion: \n means backslash + n.</div>                       
+                        <div style="font-size:12px;margin-bottom:8px">Appended literally to the validation command and all execution commands. No escape conversion: \n means backslash + n.</div>    
+                        <button id="btn-auto-interact-run-cmd">Run Cmd</button>
                         <button id="btn-auto-interact-save" type="submit" disabled>Save Auto Interact</button>
                     </div>
                 </form>
@@ -942,6 +943,20 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
         });
     }
 
+    function autoInteractRunCmd(payload) {
+        if (autoBusy || !autoLoaded || setupLocked) return;
+        autoBusy = true;
+        autoUpdateControls();
+        autoMessage("Run...", false);
+        api("POST", "/api/auto_interact_run_cmd", payload, function(err, response, status) {
+            autoBusy = false;
+            var success = !err && status === 200 && response && response.ok;
+            autoMessage(success ? "Run cmd finished" : ((response && response.error) ||
+                ((err && err.message) || "Failed to run cmd") + "; reload to check device state"), !success);
+            autoUpdateControls();
+        });
+    }
+
     autoReload.addEventListener("click", loadAutoInteract);
     document.getElementById("btn-auto-interact-add").addEventListener("click", function() {
         if (autoCommands.children.length >= 10) return;
@@ -975,6 +990,31 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
                     exec_cmds_timeout_s: timeouts,
                     error_keywords: keywords
                 }
+            });
+        } catch (error) {
+            autoMessage(error.message, true);
+        }
+    });
+    document.getElementById("btn-auto-interact-run-cmd").addEventListener("click", function() {
+        event.preventDefault();
+        try {
+            var commands = [];
+            var timeouts = [];
+            Array.prototype.forEach.call(autoCommands.children, function(row, index) {
+                commands.push(autoCommand(row.querySelector("textarea").value, 59, "Command " + (index + 1)));
+                timeouts.push(autoNumber(row.querySelector("input").value, "Command timeout"));
+            });
+            var keywords = document.getElementById("auto-interact-keywords").value.split(/\r?\n/).filter(function(keyword) { return keyword.length > 0; });
+            if (commands.length < 1 || commands.length > 10) throw new Error("Provide 1-10 commands");
+            if (keywords.length > 10) throw new Error("Provide at most 10 error keywords");
+            keywords.forEach(function(keyword) { autoString(keyword, 19, "Error keyword"); });
+            autoInteractRunCmd({                
+                target_prompt: autoString(document.getElementById("auto-interact-prompt").value, 19, "Target prompt"),
+                validate_cmd: autoCommand(document.getElementById("auto-interact-validate").value, 19, "Validation command"),
+                validate_cmd_resp: autoString(document.getElementById("auto-interact-response").value, 39, "Validation response"),
+                exec_cmds: commands,
+                exec_cmds_timeout_s: timeouts,
+                error_keywords: keywords                
             });
         } catch (error) {
             autoMessage(error.message, true);
