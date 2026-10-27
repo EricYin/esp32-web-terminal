@@ -120,7 +120,7 @@ typedef struct {
     int fd;
     bool active;
     int port_index;
-    /* Session token captured at handshake. esp_http_server has no API for
+    /* Session token captured at handshake. esp_http_server has no  for
      * tearing down a websocket from another task, and close()ing the fd from
      * here would race with httpd reusing the number for a different socket, so
      * revocation works by refusing to send: a client whose session has gone
@@ -556,7 +556,7 @@ static esp_err_t handle_404(httpd_req_t *req, httpd_err_code_t err)
 }
 
 // --- API handlers ---
-static esp_err_t auto_interact_run_cmd(httpd_req_t *req) {
+static esp_err_t handle_auto_interact_run_cmd(httpd_req_t *req) {
     if (!require_auth(req)) return ESP_OK;
     if (!require_password_changed(req)) return ESP_OK;
     
@@ -1646,6 +1646,7 @@ esp_err_t web_server_start(void)
     //auto interact
     const httpd_uri_t route_auto_interact_config_get = { .uri = "/api/auto_interact_config", .method = HTTP_GET, .handler = handle_auto_interact_config_get };
     const httpd_uri_t route_auto_interact_config_post = { .uri = "/api/auto_interact_config", .method = HTTP_POST, .handler = handle_auto_interact_config_post };
+    const httpd_uri_t route_auto_interact_run_cmd = { .uri = "/api/auto_interact_run_cmd", .method = HTTP_POST, .handler = handle_auto_interact_run_cmd };    
 
     /* WebSocket */
     const httpd_uri_t route_ws = { .uri = "/ws", .method = HTTP_GET, .handler = handle_ws, .is_websocket = true };
@@ -1669,7 +1670,8 @@ esp_err_t web_server_start(void)
     httpd_register_uri_handler(s_server, &route_ws);
     httpd_register_uri_handler(s_server, &route_auto_interact_config_get);
     httpd_register_uri_handler(s_server, &route_auto_interact_config_post);
-
+    httpd_register_uri_handler(s_server, &route_auto_interact_run_cmd);
+    
     httpd_register_err_handler(s_server, HTTPD_404_NOT_FOUND, handle_404);
 
     ESP_LOGI(TAG, "HTTPS server started on port 443");
