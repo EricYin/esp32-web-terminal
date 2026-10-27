@@ -588,7 +588,7 @@ static esp_err_t handle_auto_interact_run_cmd(httpd_req_t *req) {
         goto invalid;
     }
     
-    esp_err_t result = run_cmd(cmd);
+    esp_err_t result = auto_interact_run_cmd(cmd);
     if (result != ESP_OK) {
         error = "Failed to run cmd";
         goto invalid;
