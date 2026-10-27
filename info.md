@@ -18,3 +18,12 @@ otadata,   data,  ota,      0x19000,  0x2000
 ota_0,     app,   ota_0,    0x20000,  0x500000
 ota_1,     app,   ota_1,    0x520000, 0x500000
 storage,   data,  spiffs,   0xA20000, 0x200000
+
+
+分区	起始地址	大小
+NVS	0x9000	64 KB
+otadata	0x19000	8 KB
+ota_0	0x20000	5 MB
+ota_1	0x520000	5 MB
+storage	0xA20000	2 MB
+
