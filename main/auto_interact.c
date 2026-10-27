@@ -349,7 +349,17 @@ esp_err_t auto_interact_config_set(auto_interact_config_t config, bool update_lo
             ESP_LOGI(TAG, "Lockout status cleared manually.");
         }
     }
+    
+    //trigger prompt by sending validation cmd if not locked
+    if (!finalConf.locked_out) {
+        esp_err_t send_result = uart_bridge_send(PORT_INDEX, (const uint8_t*)finalConf.cmd.validate_cmd, strlen(finalConf.cmd.validate_cmd));       
+        if (send_result != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to send validation command after config set. Error: %d", send_result);
+        }   
+    }
+    
     xSemaphoreGive(conf_mutex);
+
     return ESP_OK;
 }
 
