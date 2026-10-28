@@ -19,7 +19,7 @@
 
 #define TAG "AUTO_INTERACT"
 
-#define BUFFER_SIZE_LOG2   12   // 4096 字节环形缓冲区
+#define BUFFER_SIZE_LOG2   11   // 2048 字节环形缓冲区
 #define BUFFER_SIZE         (1 << BUFFER_SIZE_LOG2)
 #define BUFFER_MASK         (BUFFER_SIZE - 1)
 
