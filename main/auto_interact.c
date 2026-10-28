@@ -19,7 +19,7 @@
 
 #define TAG "AUTO_INTERACT"
 
-#define BUFFER_SIZE_LOG2   11   // 2048 字节环形缓冲区
+#define BUFFER_SIZE_LOG2   12   // 4096 字节环形缓冲区
 #define BUFFER_SIZE         (1 << BUFFER_SIZE_LOG2)
 #define BUFFER_MASK         (BUFFER_SIZE - 1)
 
@@ -54,6 +54,7 @@ static auto_interact_config_t finalConf;
 typedef struct {
     uint8_t storage[BUFFER_SIZE];
     uint32_t head; // 仅由 NotifyOutput (单写者) 递增
+    uint32_t count;
 } ring_buf_t;
 
 // 状态控制
@@ -191,7 +192,9 @@ static esp_err_t auto_interact_config_write(const auto_interact_config_t *config
     // Note: fsync() is not supported by SPIFFS on ESP-IDF; fflush() is sufficient.
 
     ESP_LOGI(TAG, "Closing file...");
-    if (fclose(file) != 0) {
+    int close_result = fclose(file);
+    file = NULL;
+    if (close_result != 0) {      
         ESP_LOGE(TAG, "fclose() failed: %s", strerror(errno));
         goto failed;
     }
@@ -232,7 +235,10 @@ static esp_err_t auto_interact_config_write(const auto_interact_config_t *config
     }
     return ESP_OK;
 
-failed:
+failed:   
+    if (file) {
+        fclose(file);
+    }
     remove(AUTO_CONFIG_TEMP_PATH);
     return ESP_FAIL;
 }
@@ -287,6 +293,7 @@ static void init_conf_mutex(void) {
 // 新增：发送命令前强行复位缓冲区，防止读到上一次交互残留下来的旧提示符
 void auto_interact_reset_buffer(void) {
     g_rb.head = 0;
+    g_rb.count = 0;
     memset(g_rb.storage, 0, BUFFER_SIZE);
 }
 
@@ -301,7 +308,12 @@ void auto_interact_rx_notify(const uint8_t *data, size_t len) {
         g_rb.storage[local_head & BUFFER_MASK] = data[i];
         local_head++;
     }
-    g_rb.head = local_head; // 原子性更新
+    g_rb.head = local_head; 
+    if (len >= BUFFER_SIZE - g_rb.count) {
+        g_rb.count = BUFFER_SIZE;
+    } else {
+        g_rb.count += (uint32_t)len;
+    }
     
     // 更新最后收到输出的时间
     g_last_update_us = esp_timer_get_time();
@@ -382,7 +394,7 @@ auto_interact_config_t auto_interact_config_get(void)
 // 【新增】将环形缓冲区内容完整线性化复制到临时 buffer 中，方便进行全局关键字检索
 static void rb_snapshot_to_linear(char *dest, size_t *out_len) {
     uint32_t current_head = g_rb.head;
-    size_t len = current_head > BUFFER_SIZE ? BUFFER_SIZE : current_head;
+    size_t len = g_rb.count;
     
     for (size_t i = 0; i < len; i++) {
         uint32_t idx = current_head - len + i;
@@ -437,8 +449,7 @@ static bool wait_for_response(const char* expected_prompt, const char* expected_
     int64_t max = (1000LL * timeout_ms);
     // 非阻塞轮询：检查当前环形缓冲区的“最末尾”是否为指定的提示符
     while (delta < max) {
-        uint32_t current_head = g_rb.head;
-        size_t available = current_head > BUFFER_SIZE ? BUFFER_SIZE : current_head;        
+        size_t available = g_rb.count;
         if (available >= prompt_len) {
             rb_read_tail(tail_buf, prompt_len);
             ESP_LOGI(TAG, "rb_read_tail for response: '%s'", tail_buf);
@@ -451,6 +462,12 @@ static bool wait_for_response(const char* expected_prompt, const char* expected_
         now = esp_timer_get_time();
         delta = (now - start);
         ESP_LOGI(TAG, "now: %" PRId64 ", delta: %" PRId64 ", max: %" PRId64, now, delta, max);
+    }
+    
+    //check it last time
+    if (!seen_prompt_at_tail && g_rb.count >= prompt_len) {
+        rb_read_tail(tail_buf, prompt_len);
+        seen_prompt_at_tail = strcmp(tail_buf, expected_prompt) == 0;
     }
     free(tail_buf);
 
@@ -473,7 +490,7 @@ static bool wait_for_response(const char* expected_prompt, const char* expected_
     // 使用循环检查缓冲区是否包含任意一个关键字
     for (size_t i = 0; i < error_keywords_count; i++) {
         if (strcasestr_custom(linear_buf, error_keywords[i]) != NULL) {
-            ESP_LOGE(TAG, "Error key text found: %s", error_keywords[i]);
+            ESP_LOGE(TAG, "Error key text %s found in %s", error_keywords[i], linear_buf);
             has_error = true;
             break; // 只要匹配到一个错误关键字，立即判定为有错并退出循环
         }
