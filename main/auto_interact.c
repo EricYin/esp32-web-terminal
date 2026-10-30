@@ -28,16 +28,16 @@ static const int PORT_INDEX = 0;
 
 // 配置您目前的 U-Boot 自动化需求
 static const auto_interact_cmd_t cmd = {
-    .target_prompt = "uboot >",
+    .target_prompt = "db12x> ",
     .validate_cmd = "version\n",
-    .validate_cmd_resp = "uboot >", 
+    .validate_cmd_resp = "U-Boot 1.1.4", 
     .exec_cmds =  {
                     "setenv serverip 192.168.1.100\n",
                     "tftpboot 0x81000000 op.bin\n",
                     "bootm 0x81000000\n"
                   },
     .exec_cmds_timeout_s = {5, 300, 20},
-    .error_keywords = {"err", "error", "fail", "exception", "not found"},
+    .error_keywords = {"error", "fail", "exception", "not found"},
     .error_keywords_count = 5,
     .cmd_count = 3
 };
@@ -272,7 +272,7 @@ static esp_err_t auto_interact_config_read(auto_interact_config_t *config)
     }
     esp_err_t backup_result = auto_interact_config_read_file(AUTO_CONFIG_BACKUP_PATH, config);
     if (backup_result == ESP_OK) {
-        ESP_LOGW(TAG, "Recovered configuration from backup");
+        ESP_LOGE(TAG, "Recovered configuration from backup");
         return ESP_OK;
     }
     if (primary_result == ESP_ERR_NOT_FOUND && backup_result == ESP_ERR_NOT_FOUND) { 
@@ -432,7 +432,8 @@ static void rb_read_tail(char *dest, size_t n) {
 // 【核心重构】等待 U-Boot 响应函数
 // 结束条件：看到控制台提示符比如 uboot 提示符为结尾；结束后检查缓冲区是否含有错误字串。
 // 例外逻辑：最后一条命令超时视为成功；若超时且没有停留在当前控制台提示符比如 uboot 提示符则设为失败。
-static bool wait_for_response(const char* expected_prompt, const char* expected_resp, char error_keywords[][CONFIG_AUTO_INTERACT_ERROR_KEYWORD_MAX_LEN], size_t error_keywords_count, uint32_t wait_timeout_ms, uint32_t timeout_ms, bool is_last_cmd) {
+static bool wait_for_response(const char* expected_prompt, const char* expected_resp, char error_keywords[][CONFIG_AUTO_INTERACT_ERROR_KEYWORD_MAX_LEN], 
+                              size_t error_keywords_count, uint32_t wait_timeout_ms, uint32_t timeout_ms, bool try_break, bool is_last_cmd) {
 
     // 稍作延时，错开刚输入的命令自身
     vTaskDelay(pdMS_TO_TICKS(wait_timeout_ms));
@@ -470,56 +471,56 @@ static bool wait_for_response(const char* expected_prompt, const char* expected_
         seen_prompt_at_tail = strcmp(tail_buf, expected_prompt) == 0;
     }
     free(tail_buf);
-
-    // 全局错误字串提取与检索
-    char *linear_buf = malloc(BUFFER_SIZE + 1);
-    if (!linear_buf) return false;
-    
-    size_t current_len = 0;
-    rb_snapshot_to_linear(linear_buf, &current_len);
-    
-    bool has_error = false;
-
-    if (expected_resp != NULL && strcasestr_custom(linear_buf, expected_resp) == NULL) {
-        has_error = true;
-        ESP_LOGE(TAG, "Expected response key text not found: %s", expected_resp);
-        free(linear_buf);
-        return false;
-    }
-    
-    // 使用循环检查缓冲区是否包含任意一个关键字
-    for (size_t i = 0; i < error_keywords_count; i++) {
-        if (strcasestr_custom(linear_buf, error_keywords[i]) != NULL) {
-            ESP_LOGE(TAG, "Error key text %s found in %s", error_keywords[i], linear_buf);
-            has_error = true;
-            break; // 只要匹配到一个错误关键字，立即判定为有错并退出循环
-        }
-    }
-    
-    free(linear_buf);
-
-    // ---- 核心业务逻辑决策矩阵 ----
-    if (seen_prompt_at_tail) {
-        if (is_last_cmd) {
-            ESP_LOGW(TAG, "Last command finished but still in current console env. Treated as FAIL.");
-            return false; 
-        } 
-        else if (has_error) {
-            ESP_LOGE(TAG, "Prompt matched at tail, but error keyword detected in buffer!");
-            return false; // 包含错误关键字符串，失败
-        } 
-        else {
-            return true; // 看到提示符为结尾且无错，成功
-        }
-    } else {
+   
+    if (!seen_prompt_at_tail) {
+        if (try_break) {
+            uart_bridge_send(PORT_INDEX, (const uint8_t*)"\x03", 1);
+        }     
+        
         // 未看到提示符（超时）的情况
         if (is_last_cmd) {
-            ESP_LOGW(TAG, "Last command timed out. Treated as SUCCESS.");
+            ESP_LOGI(TAG, "Last command timed out. Treated as SUCCESS.");
             return true; // 例外：最后一条命令无错超时，视为成功
         } else {
             ESP_LOGE(TAG, "Command timed out and missed the prompt at tail.");
             return false; // 非最后一条命令超时，失败
         }
+    }       
+    else {
+
+        if (is_last_cmd) {
+            ESP_LOGE(TAG, "Last command finished but still in current console env. Treated as FAIL.");
+            return false; 
+        } 
+
+        // 全局错误字串提取与检索
+        char *linear_buf = malloc(BUFFER_SIZE + 1);
+        if (!linear_buf) {
+            ESP_LOGE(TAG, "No enough memory to alloc linear_buf!");
+            return false;
+        }
+        
+        size_t current_len = 0;
+        rb_snapshot_to_linear(linear_buf, &current_len);       
+
+        if (expected_resp != NULL && strcasestr_custom(linear_buf, expected_resp) == NULL) {
+            ESP_LOGE(TAG, "Expected response key text not found: %s", expected_resp);
+            free(linear_buf);
+            return false;
+        }
+        
+        // 使用循环检查缓冲区是否包含任意一个关键字
+        for (size_t i = 0; i < error_keywords_count; i++) {
+            if (strcasestr_custom(linear_buf, error_keywords[i]) != NULL) {
+                ESP_LOGE(TAG, "Prompt matched at tail, but error keyword detected in buffer!");
+                ESP_LOGE(TAG, "Error key text %s found in %s", error_keywords[i], linear_buf);           
+                free(linear_buf);
+                return false;
+            }
+        }        
+
+        free(linear_buf);
+        return true;       
     }
 }
 
@@ -533,7 +534,7 @@ esp_err_t auto_interact_run_cmd(auto_interact_cmd_t cmd) {
         return ESP_FAIL;
     }   
     // 检查验证是否通过
-    if (!wait_for_response(cmd.target_prompt, cmd.validate_cmd_resp, cmd.error_keywords, cmd.error_keywords_count, 150, 5000, false)) {
+    if (!wait_for_response(cmd.target_prompt, cmd.validate_cmd_resp, cmd.error_keywords, cmd.error_keywords_count, 150, 5000, false, false)) {
         ESP_LOGE(TAG, "validation command failed. Error: %d", send_result);
         return ESP_FAIL;
     }
@@ -554,7 +555,7 @@ esp_err_t auto_interact_run_cmd(auto_interact_cmd_t cmd) {
         
         // 【改动点】将 is_last 标志传入重构后的函数中
         uint32_t timeout = cmd.exec_cmds_timeout_s[i] * 1000U;
-        if (!wait_for_response(cmd.target_prompt, NULL, cmd.error_keywords, cmd.error_keywords_count, 150, timeout, is_last)) {
+        if (!wait_for_response(cmd.target_prompt, NULL, cmd.error_keywords, cmd.error_keywords_count, 150, timeout, !is_last, is_last)) {
             ESP_LOGE(TAG, "Command index %d failed or timed out unconditionally. Aborting sequence.", (int)i);
             return ESP_FAIL;
         }    
@@ -610,7 +611,7 @@ static void auto_interact_task(void *pvParameters) {
         // 3. 硬件防损坏/无限重启环路熔断判定
         if (g_last_exec_us > 0 && (now - g_last_exec_us) < ALLOWED_TWO_AUTO_CMD_INTERVAL) {
             g_lockout_counter++;
-            ESP_LOGW(TAG, "Consecutive quick execution loop detected. Counter: %ld/3", g_lockout_counter);
+            ESP_LOGE(TAG, "Consecutive quick execution loop detected. Counter: %ld/3", g_lockout_counter);
             if (g_lockout_counter >= 3) {
                 conf.locked_out = true;
                 xSemaphoreTake(conf_mutex, portMAX_DELAY);
@@ -654,7 +655,7 @@ esp_err_t auto_interact_init(void) {
             }
         } else {
             conf.locked_out = true;
-            ESP_LOGW(TAG, "Invalid configuration files; using locked defaults");
+            ESP_LOGE(TAG, "Invalid configuration files; using locked defaults");
         }
     } else {
         conf.locked_out = true;
