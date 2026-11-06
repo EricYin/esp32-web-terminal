@@ -28,15 +28,15 @@ static const int PORT_INDEX = 0;
 
 // 配置您目前的 U-Boot 自动化需求
 static const auto_interact_cmd_t cmd = {
-    .target_prompt = "db12x> ",
+    .target_prompt = "IPQ9574#  ",
     .validate_cmd = "version\n",
-    .validate_cmd_resp = "U-Boot 1.1.4", 
+    .validate_cmd_resp = "U-Boot 2016.01", 
     .exec_cmds =  {
-                    "setenv serverip 192.168.1.100\n",
-                    "tftpboot 0x81000000 op.bin\n",
-                    "bootm 0x81000000\n"
+                    "mmc read 0x44000000 0x1fa000 0x5000\n",
+                    "setenv bootargs 'console=ttyMSM0,115200n8 root=PARTLABEL=owrt_rootfs rootwait'\n",
+                    "bootm 0x44000000\n"
                   },
-    .exec_cmds_timeout_s = {5, 300, 20},
+    .exec_cmds_timeout_s = {60, 10, 20},
     .error_keywords = {"error", "fail", "exception", "not found"},
     .error_keywords_count = 5,
     .cmd_count = 3

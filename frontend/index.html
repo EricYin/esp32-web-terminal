@@ -973,7 +973,7 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
             var commands = [];
             var timeouts = [];
             Array.prototype.forEach.call(autoCommands.children, function(row, index) {
-                commands.push(autoCommand(row.querySelector("textarea").value, 59, "Command " + (index + 1)));
+                commands.push(autoCommand(row.querySelector("textarea").value, 79, "Command " + (index + 1)));
                 timeouts.push(autoNumber(row.querySelector("input").value, "Command timeout"));
             });
             var keywords = document.getElementById("auto-interact-keywords").value.split(/\r?\n/).filter(function(keyword) { return keyword.length > 0; });
@@ -1001,7 +1001,7 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
             var commands = [];
             var timeouts = [];
             Array.prototype.forEach.call(autoCommands.children, function(row, index) {
-                commands.push(autoCommand(row.querySelector("textarea").value, 59, "Command " + (index + 1)));
+                commands.push(autoCommand(row.querySelector("textarea").value, 79, "Command " + (index + 1)));
                 timeouts.push(autoNumber(row.querySelector("input").value, "Command timeout"));
             });
             var keywords = document.getElementById("auto-interact-keywords").value.split(/\r?\n/).filter(function(keyword) { return keyword.length > 0; });
