@@ -977,7 +977,7 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
                 timeouts.push(autoNumber(row.querySelector("input").value, "Command timeout"));
             });
             var keywords = document.getElementById("auto-interact-keywords").value.split(/\r?\n/).filter(function(keyword) { return keyword.length > 0; });
-            if (commands.length < 1 || commands.length > 10) throw new Error("Provide 1-10 commands");
+            if (commands.length < 1 || commands.length > 6) throw new Error("Provide 1-6 commands");
             if (keywords.length > 10) throw new Error("Provide at most 10 error keywords");
             keywords.forEach(function(keyword) { autoString(keyword, 19, "Error keyword"); });
             saveAutoInteract({
@@ -1005,7 +1005,7 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
                 timeouts.push(autoNumber(row.querySelector("input").value, "Command timeout"));
             });
             var keywords = document.getElementById("auto-interact-keywords").value.split(/\r?\n/).filter(function(keyword) { return keyword.length > 0; });
-            if (commands.length < 1 || commands.length > 10) throw new Error("Provide 1-10 commands");
+            if (commands.length < 1 || commands.length > 6) throw new Error("Provide 1-6 commands");
             if (keywords.length > 10) throw new Error("Provide at most 10 error keywords");
             keywords.forEach(function(keyword) { autoString(keyword, 19, "Error keyword"); });
             autoInteractRunCmd({                

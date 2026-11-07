@@ -14,6 +14,9 @@
 #elif CONFIG_IDF_TARGET_ESP32S3
 #define UART_BRIDGE_TX_PIN      1
 #define UART_BRIDGE_RX_PIN      2
+#elif CONFIG_IDF_TARGET_ESP32S2
+#define UART_BRIDGE_TX_PIN      1
+#define UART_BRIDGE_RX_PIN      2
 #else // ESP32-C6
 #define UART_BRIDGE_TX_PIN      10
 #define UART_BRIDGE_RX_PIN      11
