@@ -155,7 +155,7 @@ static esp_err_t start_ap(const char *ssid, const char *password)
 {
     wifi_config_t ap_config = {
         .ap = {
-          //.channel = 1,
+            .channel = 1,
             .max_connection = 4,
             .authmode = WIFI_AUTH_WPA2_PSK,
             .pmf_cfg = { .required = false },
