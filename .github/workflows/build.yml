@@ -121,6 +121,7 @@ jobs:
           files: |
             esp32-web-terminal-esp32c3.bin
             esp32-web-terminal-esp32c6.bin
+            esp32-web-terminal-esp32s2.bin
             esp32-web-terminal-esp32s3.bin
           body_path: release-notes.md
 
