@@ -700,6 +700,7 @@ window.FitAddon={FitAddon:class{activate(e){this._terminal=e}dispose(){}fit(){co
                 ["Chip", info.chip + " rev " + info.revision + " (" + info.cores + " core" + (info.cores > 1 ? "s" : "") + ")"],
                 ["Partition", info.ota_partition],
                 ["Free heap", (info.free_heap / 1024).toFixed(0) + " KB (min: " + (info.min_free_heap / 1024).toFixed(0) + " KB)"],
+                ["WiFi max TX power", typeof info.wifi_max_tx_power_dbm === "number" ? info.wifi_max_tx_power_dbm + " dBm": "Unavailable"],
                 ["Uptime", info.uptime]
             ];
             lines.forEach(function(pair) {
