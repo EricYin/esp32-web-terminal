@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include "auto_interact.h"
+#include "esp_wifi.h"
 
 // NTP status from main.c
 extern const char *ntp_get_server(void);
@@ -875,6 +876,15 @@ static esp_err_t handle_sysinfo(httpd_req_t *req)
     // Memory
     cJSON_AddNumberToObject(root, "free_heap", (double)esp_get_free_heap_size());
     cJSON_AddNumberToObject(root, "min_free_heap", (double)esp_get_minimum_free_heap_size());
+
+    int8_t tx_power;
+    esp_err_t err = esp_wifi_get_max_tx_power(&tx_power);
+    if (err == ESP_OK) {
+        cJSON_AddNumberToObject(root, "wifi_max_tx_power_dbm", tx_power / 4.0);
+    } else {
+        ESP_LOGW(TAG, "Get WiFi TX power failed: %s", esp_err_to_name(err));
+        cJSON_AddNullToObject(root, "wifi_max_tx_power_dbm");
+    }
 
     // Uptime
     int64_t uptime_us = esp_timer_get_time();
