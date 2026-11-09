@@ -43,6 +43,21 @@ static esp_err_t start_ap(const char *ssid, const char *password);
 static void sanitize_hostname(const char *name, char *out, size_t out_len);
 static void reconnect_timer_cb(TimerHandle_t timer);
 
+static void set_wifi_tx_power(void)
+{
+    const int8_t tx_power = 34;
+    esp_err_t err = esp_wifi_set_max_tx_power(tx_power);
+
+    // int8_t max_tx_power = 80; // 20 dBm
+    // esp_wifi_set_max_tx_power(max_tx_power);
+    //esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE); 
+    
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Set WiFi TX power failed: %s",
+                 esp_err_to_name(err));
+    }
+}
+
 // Build "<base>-XXXX" AP SSID with MAC suffix, truncating the base so the
 // result never exceeds the 32-byte WiFi SSID limit
 static void build_ap_ssid(const char *base, char *out, size_t out_len)
@@ -59,6 +74,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
                           int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        set_wifi_tx_power();
         if (!s_scanning) {
             esp_wifi_connect();
         }
@@ -67,6 +83,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         // will add further addresses once this exists)
         esp_netif_create_ip6_linklocal(s_sta_netif);
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
+        set_wifi_tx_power();
         esp_netif_create_ip6_linklocal(s_ap_netif);
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         if (s_scanning) {
@@ -138,6 +155,7 @@ static esp_err_t start_ap(const char *ssid, const char *password)
 {
     wifi_config_t ap_config = {
         .ap = {
+          //.channel = 1,
             .max_connection = 4,
             .authmode = WIFI_AUTH_WPA2_PSK,
             .pmf_cfg = { .required = false },
