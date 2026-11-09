@@ -1,11 +1,7 @@
 name: Build
 
 on:
-  push:
-    branches: [main]
-    tags: ['v*', '!v*-factory']
-  pull_request:
-    branches: [main]
+   workflow_dispatch:
 
 jobs:
   # Fast gate: host-compiled unit tests (see tests/host/Makefile) + the
@@ -44,6 +40,8 @@ jobs:
             flash_size: 8MB
           - target: esp32c3
             flash_size: 4MB
+          - target: esp32s2
+            flash_size: 4MB
           - target: esp32s3
             flash_size: 8MB
     steps:
@@ -51,6 +49,9 @@ jobs:
 
       - name: Generate TLS certificates
         run: cd certs && ./generate_cert.sh && cd ..
+
+      # - name: Compress embedded terminal library
+      #   run: gzip -n -k -f frontend/lib/xterm.min.js
 
       - name: ESP-IDF build
         uses: espressif/esp-idf-ci-action@v1
