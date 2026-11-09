@@ -1,11 +1,7 @@
 name: Build
 
 on:
-  push:
-    branches: [main]
-    tags: ['v*', '!v*-factory']
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   # Fast gate: host-compiled unit tests (see tests/host/Makefile) + the
