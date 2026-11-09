@@ -64,6 +64,7 @@ jobs:
         run: |
           cp build/esp32-web-terminal.bin esp32-web-terminal-${{ matrix.target }}.bin
           cp build/factory.bin esp32-web-terminal-${{ matrix.target }}-factory.bin
+          cp sdkconfig sdkconfig-${{ matrix.target }}.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
@@ -72,7 +73,7 @@ jobs:
           path: |
             esp32-web-terminal-${{ matrix.target }}.bin
             esp32-web-terminal-${{ matrix.target }}-factory.bin
-
+            sdkconfig-${{ matrix.target }}.txt
   release:
     needs: [build, host-tests]
     if: startsWith(github.ref, 'refs/tags/v')
