@@ -1324,9 +1324,9 @@ static esp_err_t handle_sbc_trigger(httpd_req_t *req)
     set_cors_headers(req);
     httpd_resp_send(req, "{\"ok\":true,\"message\":\"Trigger...\"}", HTTPD_RESP_USE_STRLEN);
     vTaskDelay(pdMS_TO_TICKS(500));
-    uart_bridge_send(0, (const uint8_t *)"\r", 1);
+    serial_port_send(0, (const uint8_t *)"\r", 1);
     // const char *cmd = "ls\r";
-    // uart_bridge_send(0, (const uint8_t *)cmd, strlen(cmd));
+    // serial_port_send(0, (const uint8_t *)cmd, strlen(cmd));
     return ESP_OK;
 }
 
