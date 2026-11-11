@@ -1315,6 +1315,21 @@ static esp_err_t handle_esp_reboot(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t handle_sbc_trigger(httpd_req_t *req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    if (!require_password_changed(req)) return ESP_OK;
+    ESP_LOGI(TAG, "SBC trigger requested via API");
+    httpd_resp_set_type(req, "application/json");
+    set_cors_headers(req);
+    httpd_resp_send(req, "{\"ok\":true,\"message\":\"Trigger...\"}", HTTPD_RESP_USE_STRLEN);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    uart_bridge_send(0, (const uint8_t *)"\r", 1);
+    // const char *cmd = "ls\r";
+    // uart_bridge_send(0, (const uint8_t *)cmd, strlen(cmd));
+    return ESP_OK;
+}
+
 // --- TLS certificate upload handler ---
 
 static esp_err_t handle_tls_upload(httpd_req_t *req)
@@ -1652,6 +1667,8 @@ esp_err_t web_server_start(void)
     const httpd_uri_t route_ota_github = { .uri = "/api/ota/github", .method = HTTP_POST, .handler = handle_ota_github };
     const httpd_uri_t route_tls = { .uri = "/api/tls", .method = HTTP_POST, .handler = handle_tls_upload };
     const httpd_uri_t route_reboot = { .uri = "/api/reboot", .method = HTTP_POST, .handler = handle_esp_reboot };
+    const httpd_uri_t route_reboot = { .uri = "/api/trigger", .method = HTTP_POST, .handler = handle_sbc_trigger };
+    
 
     //auto interact
     const httpd_uri_t route_auto_interact_config_get = { .uri = "/api/auto_interact_config", .method = HTTP_GET, .handler = handle_auto_interact_config_get };
