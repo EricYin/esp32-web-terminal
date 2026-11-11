@@ -1256,7 +1256,11 @@ static esp_err_t handle_ota(httpd_req_t *req)
         if (read_len <= 0) {
             /* Cap timeout retries: the httpd is single-threaded, so a stalled
              * client would otherwise hang the whole server indefinitely */
-            if (read_len == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 5) continue;
+            if (read_len == HTTPD_SOCK_ERR_TIMEOUT ||
+                read_len == ESP_TLS_ERR_SSL_WANT_READ || 
+                read_len == ESP_TLS_ERR_SSL_WANT_WRITE ||
+                read_len == MBEDTLS_ERR_SSL_TIMEOUT)
+                && ++timeouts < 10) continue;
             ESP_LOGE(TAG, "OTA recv error at %d/%d", total_read, req->content_len);
             failed = true;
             break;
