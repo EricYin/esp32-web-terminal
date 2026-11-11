@@ -75,6 +75,7 @@ esp_err_t uart_bridge_send(int port_index, const uint8_t *data, size_t len)
         ESP_LOGE(TAG, "UART write failed");
         return ESP_FAIL;
     }
+    ESP_LOGI(TAG, "uart_bridge_send: '%s'", data);
     return ESP_OK;
 }
 
