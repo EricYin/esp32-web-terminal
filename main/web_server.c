@@ -1633,7 +1633,7 @@ esp_err_t web_server_start(void)
 {
     httpd_ssl_config_t config = HTTPD_SSL_CONFIG_DEFAULT();
     config.httpd.max_open_sockets = 4;
-    config.httpd.max_uri_handlers = 20;
+    config.httpd.max_uri_handlers = 24;
     config.httpd.stack_size = 10240;
     config.httpd.lru_purge_enable = true;
     config.httpd.close_fn = on_close;
@@ -1671,7 +1671,7 @@ esp_err_t web_server_start(void)
     const httpd_uri_t route_ota_github = { .uri = "/api/ota/github", .method = HTTP_POST, .handler = handle_ota_github };
     const httpd_uri_t route_tls = { .uri = "/api/tls", .method = HTTP_POST, .handler = handle_tls_upload };
     const httpd_uri_t route_reboot = { .uri = "/api/reboot", .method = HTTP_POST, .handler = handle_esp_reboot };
-    const httpd_uri_t route_reboot = { .uri = "/api/trigger", .method = HTTP_POST, .handler = handle_sbc_trigger };
+    const httpd_uri_t route_trigger = { .uri = "/api/trigger", .method = HTTP_POST, .handler = handle_sbc_trigger };
     
 
     //auto interact
@@ -1698,6 +1698,7 @@ esp_err_t web_server_start(void)
     httpd_register_uri_handler(s_server, &route_ota_github);
     httpd_register_uri_handler(s_server, &route_tls);
     httpd_register_uri_handler(s_server, &route_reboot);
+    httpd_register_uri_handler(s_server, &route_trigger);
     httpd_register_uri_handler(s_server, &route_ws);
     httpd_register_uri_handler(s_server, &route_auto_interact_config_get);
     httpd_register_uri_handler(s_server, &route_auto_interact_config_post);
