@@ -1635,9 +1635,9 @@ esp_err_t web_server_init(void)
 esp_err_t web_server_start(void)
 {
     httpd_ssl_config_t config = HTTPD_SSL_CONFIG_DEFAULT();
-    config.httpd.max_open_sockets = 4;
+    config.httpd.max_open_sockets = 3;
     config.httpd.max_uri_handlers = 24;
-    config.httpd.stack_size = 10240;
+    config.httpd.stack_size = 8192;
     config.httpd.lru_purge_enable = true;
     config.httpd.close_fn = on_close;
 
