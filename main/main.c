@@ -12,6 +12,11 @@
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
 #include <time.h>
+
+#include "sdkconfig.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "auto_interact.h"
 
 static const char *TAG = "main";
@@ -97,6 +102,11 @@ void app_main(void)
     // 4. Initialize NTP before WiFi so DHCP NTP discovery is ready
     //    when the DHCP lease arrives
     ntp_init();
+
+    #if CONFIG_IDF_TARGET_ESP32S2 && CONFIG_ESP_CONSOLE_USB_CDC
+    ESP_LOGI(TAG, "Waiting 5 seconds for USB CDC enumeration before WiFi initialization");
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    #endif
 
     // 5. Initialize WiFi
     ESP_ERROR_CHECK(wifi_manager_init());
