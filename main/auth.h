@@ -9,7 +9,7 @@
 
 #define AUTH_SESSION_TOKEN_LEN  32
 #define AUTH_MAX_SESSIONS       1
-#define AUTH_SESSION_TIMEOUT_S  3600  // 1 hour
+#define AUTH_SESSION_TIMEOUT_S  600  // 10 min
 #define AUTH_MAX_FAILED         5
 #define AUTH_LOCKOUT_S          300   // 5 minutes
 #define AUTH_TRACKED_HOSTS      8     // addresses with login counters kept at once
