@@ -22,7 +22,9 @@ static void serve(const char *app_version, const char *tag, int status)
              "{\"name\":\"esp32-web-terminal-esp32c6.bin\","
              "\"browser_download_url\":\"https://host/esp32c6.bin\",\"size\":123},"
              "{\"name\":\"esp32-web-terminal-esp32s3.bin\","
-             "\"browser_download_url\":\"https://host/esp32s3.bin\"}"
+             "\"browser_download_url\":\"https://host/esp32s3.bin\"},"
+             "{\"name\":\"esp32-web-terminal-esp32s2.bin\","
+             "\"browser_download_url\":\"https://host/esp32s2.bin\"}"
              "],\"upload_date\":\"2026-01-01T00:00:00Z\"}",
              tag);
     test_app_desc_set(app_version);
