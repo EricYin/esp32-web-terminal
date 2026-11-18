@@ -117,6 +117,9 @@ void test_session_slides_on_activity(void)
  * slot by expiry and is forced into the LRU path.) */
 void test_eviction_prefers_least_recently_used(void)
 {
+#if AUTH_MAX_SESSIONS < 2
+    TEST_IGNORE_MESSAGE("LRU eviction requires at least two session slots");
+#else
     char *toks[AUTH_MAX_SESSIONS + 1];
     for (int i = 0; i < AUTH_MAX_SESSIONS; i++) {
         test_clock_advance_us(1000000);
@@ -136,6 +139,7 @@ void test_eviction_prefers_least_recently_used(void)
         TEST_ASSERT_TRUE(auth_validate_session(toks[i]));
     }
     for (int i = 0; i <= AUTH_MAX_SESSIONS; i++) free(toks[i]);
+#endif
 }
 
 /* Lockout is per-address: attacker on .66 must not lock the owner out on .10
