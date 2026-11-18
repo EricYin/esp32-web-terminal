@@ -8,7 +8,13 @@
 #include <stdbool.h>
 
 #define AUTH_SESSION_TOKEN_LEN  32
+
+#if CONFIG_IDF_TARGET_ESP32S3
+#define AUTH_MAX_SESSIONS       2
+#else
 #define AUTH_MAX_SESSIONS       1
+#endif
+
 #define AUTH_SESSION_TIMEOUT_S  600  // 10 min
 #define AUTH_MAX_FAILED         5
 #define AUTH_LOCKOUT_S          300   // 5 minutes
